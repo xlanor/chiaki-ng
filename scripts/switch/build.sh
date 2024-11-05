@@ -15,7 +15,8 @@ BASEDIR=$(realpath "${SCRIPTDIR}/../../")
 build_chiaki (){
 	pushd "${BASEDIR}"
 		#rm -rf ./build
-
+		echo "Base = ${BASEDIR}/build_switch}"
+	    rm -r build_switch
 		# purge leftover proto/nanopb_pb2.py which may have been created with another protobuf version
 		rm -fv third-party/nanopb/generator/proto/nanopb_pb2.py
 
@@ -31,7 +32,8 @@ build_chiaki (){
 			-DCHIAKI_ENABLE_STEAMDECK_NATIVE=OFF\
 			-DCHIAKI_ENABLE_STEAM_SHORTCUT=OFF \
 			-DCMAKE_FIND_DEBUG_MODE=OFF \
-			-DJSON_C_LIBRARY_DIRS=/usr/lib \
+			-DJSON_C_LIBRARY_DIR=/usr/lib \
+			-DJSON_C_PKGNAME=json-c\
 			-DOPENSSL_ROOT_DIR="/usr/include/openssl" \
 			-DOPENSSL_INCLUDE_DIR="/usr/include/openssl" \
 			-DOPENSSL_SSL_LIBRARY="/usr/lib/libssl.so.3" \

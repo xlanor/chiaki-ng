@@ -134,10 +134,37 @@ target_include_directories(chiaki-lib PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/includ
 find_package(Threads REQUIRED)
 target_link_libraries(chiaki-lib Threads::Threads)
 
+target_include_directories(chiaki-lib PUBLIC "/usr/include")
+
+# Define a CMake option to allow the user to specify the package name
+option(JSON_C_PKG_NAME "Name of the json-c package to search for using pkg-config" "json-c")
+
+# Define a CMake option to allow the user to specify the library directory
+option(JSON_C_LIBRARY_DIR "Directory containing the json-c library" "/usr/lib")
+
 find_package(PkgConfig REQUIRED)
-pkg_search_module(json-c REQUIRED json-c IMPORTED_TARGET)
-target_include_directories(chiaki-lib PRIVATE ${json-c_INCLUDE_DIRS})
-target_link_libraries(chiaki-lib PkgConfig::json-c)
+
+# Search for the json-c package using pkg-config
+pkg_search_module(JSON_C QUIET json-c IMPORTED_TARGET)
+
+if(JSON_C_FOUND)
+	target_include_directories(chiaki-lib PRIVATE ${json-c_INCLUDE_DIRS})
+	target_link_libraries(chiaki-lib PkgConfig::json-c)
+else()
+    # If the package is not found using pkg-config, try to find the library directly
+    find_library(JSON_C_LIBRARY
+        NAMES json-c
+        PATHS ${JSON_C_LIBRARY_DIR}
+    )
+
+    if(JSON_C_LIBRARY)
+        get_filename_component(JSON_C_LIBRARY_DIR ${JSON_C_LIBRARY} DIRECTORY)
+		target_include_directories(chiaki-lib PRIVATE ${JSON_C_LIBRARY_DIR}/include)
+        target_link_libraries(chiaki-lib ${JSON_C_LIBRARY})
+    else()
+        message(FATAL_ERROR "json-c package '${JSON_C_PKG_NAME}' not found")
+    endif()
+endif()
 
 find_package(PkgConfig REQUIRED)
 pkg_search_module(MINIUPNPC REQUIRED miniupnpc IMPORTED_TARGET)
