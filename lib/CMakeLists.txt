@@ -156,11 +156,11 @@ else()
         NAMES json-c
         PATHS ${JSON_C_LIBRARY_DIR}
     )
-
     if(JSON_C_LIBRARY)
         get_filename_component(JSON_C_LIBRARY_DIR ${JSON_C_LIBRARY} DIRECTORY)
 		target_include_directories(chiaki-lib PRIVATE ${JSON_C_LIBRARY_DIR}/include)
         target_link_libraries(chiaki-lib ${JSON_C_LIBRARY})
+		message(STATUS "manually linked json-c using -DJSON_C_PKG_NAME and -DJSON_C_LIBRARY_DIR")
     else()
         message(FATAL_ERROR "json-c package '${JSON_C_PKG_NAME}' not found")
     endif()
