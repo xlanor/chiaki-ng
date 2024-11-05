@@ -16,12 +16,13 @@ build_chiaki (){
 	pushd "${BASEDIR}"
 		#rm -rf ./build
 		echo "Base = ${BASEDIR}/build_switch}"
-	    rm -r build_switch
+	    rm -rf build_switch
 		# purge leftover proto/nanopb_pb2.py which may have been created with another protobuf version
 		rm -fv third-party/nanopb/generator/proto/nanopb_pb2.py
 
 		cmake -B "${build}" \
 			-GNinja \
+			-DHAVE_SOCKETPAIR=OFF \
 			-DCMAKE_TOOLCHAIN_FILE=${toolchain} \
 			-DCHIAKI_ENABLE_TESTS=OFF \
 			-DCHIAKI_ENABLE_CLI=OFF \
@@ -34,6 +35,8 @@ build_chiaki (){
 			-DCMAKE_FIND_DEBUG_MODE=OFF \
 			-DJSON_C_LIBRARY_DIR=/usr/lib \
 			-DJSON_C_PKGNAME=json-c\
+			-DCURL_INCLUDE_DIR="/usr/include/curl" \
+			-DCURL_LIBRARY="/curl/lib" \
 			-DOPENSSL_ROOT_DIR="/usr/include/openssl" \
 			-DOPENSSL_INCLUDE_DIR="/usr/include/openssl" \
 			-DOPENSSL_SSL_LIBRARY="/usr/lib/libssl.so.3" \
