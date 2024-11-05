@@ -1,11 +1,11 @@
 #!/bin/bash
 
 cd "`dirname $(readlink -f ${0})`/../.."
-
+echo "In $PWD"
 podman run --rm \
 	-v "`pwd`:/build/chiaki" \
 	-w "/build/chiaki" \
 	-it \
-	thestr4ng3r/chiaki-build-switch:v2 \
+	localhost/chiaki-switch:latest \
 	/bin/bash -c "scripts/switch/build.sh"
 
