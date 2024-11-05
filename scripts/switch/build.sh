@@ -31,9 +31,11 @@ build_chiaki (){
 			-DCHIAKI_ENABLE_STEAMDECK_NATIVE=OFF\
 			-DCHIAKI_ENABLE_STEAM_SHORTCUT=OFF \
 			-DCMAKE_FIND_DEBUG_MODE=OFF \
-			-DOPENSSL_INCLUDE_DIR="/usr/include/openssl" \ 
+			-DJSON_C_LIBRARY_DIRS=/usr/lib \
+			-DOPENSSL_ROOT_DIR="/usr/include/openssl" \
+			-DOPENSSL_INCLUDE_DIR="/usr/include/openssl" \
 			-DOPENSSL_SSL_LIBRARY="/usr/lib/libssl.so.3" \
-			-DOPENSSL_CRYPTO_LIBRARY="/usr/lib/libcrypto.so.3" \
+			-DOPENSSL_CRYPTO_LIBRARY="/usr/lib/libcrypto.so.3"
 			# -DCMAKE_VERBOSE_MAKEFILE:BOOL=ON \
 			# -DCMAKE_FIND_DEBUG_MODE=ON
 
