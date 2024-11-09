@@ -102,10 +102,7 @@ QmlMainWindow::QmlMainWindow(const StreamSessionConnectInfo &connect_info)
     if (connect_info.fullscreen || connect_info.zoom || connect_info.stretch)
         showFullScreen();
 
-    connect(session, &StreamSession::ConnectedChanged, this, [this]() {
-        if (session->IsConnected())
-            connect(session, &StreamSession::SessionQuit, qGuiApp, &QGuiApplication::quit);
-    });
+    connect(session, &StreamSession::SessionQuit, qGuiApp, &QGuiApplication::quit);
 }
 
 QmlMainWindow::~QmlMainWindow()
@@ -154,6 +151,8 @@ void QmlMainWindow::updateWindowType(WindowType type)
 {
     switch (type) {
     case WindowType::SelectedResolution:
+        break;
+    case WindowType::CustomResolution:
         break;
     case WindowType::Fullscreen:
         showFullScreen();
@@ -273,8 +272,7 @@ void QmlMainWindow::show()
         QMetaObject::invokeMethod(QGuiApplication::instance(), &QGuiApplication::quit, Qt::QueuedConnection);
         return;
     }
-
-    resize(1280, 720);
+    resize(1920, 1080);
 
     if (qEnvironmentVariable("XDG_CURRENT_DESKTOP") == "gamescope")
         showFullScreen();
@@ -501,10 +499,7 @@ void QmlMainWindow::init(Settings *settings, bool exit_app_on_stream_exit)
         }
         if(session && exit_app_on_stream_exit)
         {
-            connect(session, &StreamSession::ConnectedChanged, this, [this]() {
-                if (session->IsConnected())
-                    connect(session, &StreamSession::SessionQuit, qGuiApp, &QGuiApplication::quit);
-            });
+            connect(session, &StreamSession::SessionQuit, qGuiApp, &QGuiApplication::quit);
         }
     });
     connect(backend, &QmlBackend::windowTypeUpdated, this, &QmlMainWindow::updateWindowType);

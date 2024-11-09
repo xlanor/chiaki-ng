@@ -193,14 +193,6 @@ QmlBackend::QmlBackend(Settings *settings, QmlMainWindow *window)
     });
     connect(wakeup_start_timer, &QTimer::timeout, this, [this]
     {
-        wakeup_nickname.clear();
-        wakeup_start = false;
-        chiaki_log_mutex.lock();
-        chiaki_log_ctx = nullptr;
-        chiaki_log_mutex.unlock();
-
-        session->deleteLater();
-        session = nullptr;
         emit wakeupStartFailed();
     });
     psn_auto_connect_timer->start(PSN_INTERNET_WAIT_SECONDS * 1000);
@@ -572,24 +564,36 @@ void QmlBackend::checkPsnConnection(const ChiakiErrorCode &err)
             setConnectState(PsnConnectState::ConnectFailedStart);
             if(session)
             {
+                chiaki_log_mutex.lock();
+                chiaki_log_ctx = nullptr;
+                chiaki_log_mutex.unlock();
                 delete session;
                 session = nullptr;
+                setDiscoveryEnabled(true);
             }
             break;
         case CHIAKI_ERR_HOST_UNREACH:
             setConnectState(PsnConnectState::ConnectFailedConsoleUnreachable);
             if(session)
             {
+                chiaki_log_mutex.lock();
+                chiaki_log_ctx = nullptr;
+                chiaki_log_mutex.unlock();
                 delete session;
                 session = nullptr;
+                setDiscoveryEnabled(true);
             }
             break;
         default:
             setConnectState(PsnConnectState::ConnectFailed);
             if(session)
             {
+                chiaki_log_mutex.lock();
+                chiaki_log_ctx = nullptr;
+                chiaki_log_mutex.unlock();
                 delete session;
                 session = nullptr;
+                setDiscoveryEnabled(true);
             }
             break;
     }
@@ -600,7 +604,12 @@ void QmlBackend::psnSessionStart()
     try {
         session->Start();
     } catch (const Exception &e) {
-        emit error(tr("Stream failed"), tr("Failed to initialize Stream Session: %1").arg(e.what()));
+        chiaki_log_mutex.lock();
+        chiaki_log_ctx = nullptr;
+        chiaki_log_mutex.unlock();
+        delete session;
+        session = nullptr;
+        emit error(tr("Stream failed"), tr("Failed to start Stream Session: %1").arg(e.what()));
         return;
     }
 
@@ -763,7 +772,15 @@ void QmlBackend::createSession(const StreamSessionConnectInfo &connect_info)
     });
 
     if (window->windowState() != Qt::WindowFullScreen)
-        window->resize(connect_info.video_profile.width, connect_info.video_profile.height);
+    {
+        if(settings->GetWindowType() == WindowType::CustomResolution)
+        {
+            window->resize(settings->GetCustomResolutionWidth(), settings->GetCustomResolutionHeight());
+            window->setMaximumSize(QSize(settings->GetCustomResolutionWidth(), settings->GetCustomResolutionHeight()));
+        }
+        else
+            window->resize(connect_info.video_profile.width, connect_info.video_profile.height);
+    }
 
     chiaki_log_mutex.lock();
     chiaki_log_ctx = session->GetChiakiLog();
@@ -782,7 +799,12 @@ void QmlBackend::createSession(const StreamSessionConnectInfo &connect_info)
             try {
                 session->Start();
             } catch (const Exception &e) {
-                emit error(tr("Stream failed"), tr("Failed to initialize Stream Session: %1").arg(e.what()));
+                emit error(tr("Stream failed"), tr("Failed to start Stream Session: %1").arg(e.what()));
+                chiaki_log_mutex.lock();
+                chiaki_log_ctx = nullptr;
+                chiaki_log_mutex.unlock();
+                delete session;
+                session = nullptr;
                 return;
             }
             emit sessionChanged(session);
@@ -1004,6 +1026,8 @@ void QmlBackend::connectToHost(int index, QString nickname)
     switch (settings->GetWindowType()) {
     case WindowType::SelectedResolution:
         break;
+    case WindowType::CustomResolution:
+        break;
     case WindowType::Fullscreen:
         fullscreen = true;
         break;
@@ -1157,8 +1181,17 @@ void QmlBackend::stopAutoConnect()
     if(!wakeup_nickname.isEmpty())
     {
         wakeup_start_timer->stop();
-        wakeup_start = false;
         wakeup_nickname.clear();
+        if(wakeup_start)
+        {
+            wakeup_start = false;
+            chiaki_log_mutex.lock();
+            chiaki_log_ctx = nullptr;
+            chiaki_log_mutex.unlock();
+
+            session->deleteLater();
+            session = nullptr;
+        }
     }
     emit autoConnectChanged();
 }
@@ -1760,8 +1793,13 @@ void QmlBackend::updateDiscoveryHosts()
                 try {
                     session->Start();
                 } catch (const Exception &e) {
-                    emit error(tr("Stream failed"), tr("Failed to initialize Stream Session: %1").arg(e.what()));
+                    emit error(tr("Stream failed"), tr("Failed to start Stream Session: %1").arg(e.what()));
                     session_start_succeeded = false;
+                    chiaki_log_mutex.lock();
+                    chiaki_log_ctx = nullptr;
+                    chiaki_log_mutex.unlock();
+                    delete session;
+                    session = nullptr;
                 }
                 if(session_start_succeeded)
                 {
