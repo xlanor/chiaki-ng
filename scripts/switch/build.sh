@@ -22,7 +22,7 @@ build_chiaki (){
 
 		cmake -B "${build}" \
 			-GNinja \
-			-DHAVE_SOCKETPAIR=OFF \
+			-DCHIAKI_ENABLE_SWITCH_CURL=ON \
 			-DCMAKE_TOOLCHAIN_FILE=${toolchain} \
 			-DCHIAKI_ENABLE_TESTS=OFF \
 			-DCHIAKI_ENABLE_CLI=OFF \
@@ -33,14 +33,7 @@ build_chiaki (){
 			-DCHIAKI_ENABLE_STEAMDECK_NATIVE=OFF\
 			-DCHIAKI_ENABLE_STEAM_SHORTCUT=OFF \
 			-DCMAKE_FIND_DEBUG_MODE=OFF \
-			-DJSON_C_LIBRARY_DIR=/usr/lib \
-			-DJSON_C_PKGNAME=json-c\
-			-DCURL_INCLUDE_DIR="/usr/include/curl" \
-			-DCURL_LIBRARY="/curl/lib" \
-			-DOPENSSL_ROOT_DIR="/usr/include/openssl" \
-			-DOPENSSL_INCLUDE_DIR="/usr/include/openssl" \
-			-DOPENSSL_SSL_LIBRARY="/usr/lib/libssl.so.3" \
-			-DOPENSSL_CRYPTO_LIBRARY="/usr/lib/libcrypto.so.3"
+			# -DJSON_C_LIBRARY_DIR=/opt/devkitpro/portlibs/switch/lib 
 			# -DCMAKE_VERBOSE_MAKEFILE:BOOL=ON \
 			# -DCMAKE_FIND_DEBUG_MODE=ON
 

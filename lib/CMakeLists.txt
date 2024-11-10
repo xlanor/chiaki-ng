@@ -188,11 +188,15 @@ else()
 	target_link_libraries(chiaki-lib OpenSSL::Crypto)
 endif()
 
-if (CHIAKI_USE_SYSTEM_CURL)
+if (CHIAKI_ENABLE_SWITCH_CURL)
+  	find_library(CURL_LIB curl PATHS /opt/devkitpro/portlibs/switch/lib)
+  	target_link_libraries(chiaki-lib ${CURL_LIB})
+elseif (CHIAKI_USE_SYSTEM_CURL)
 	target_link_libraries(chiaki-lib CURL::libcurl_shared)
 else()
 	target_link_libraries(chiaki-lib CURL::libcurl_static)
 endif()
+
 target_link_libraries(chiaki-lib Nanopb::nanopb)
 target_link_libraries(chiaki-lib Jerasure::Jerasure)
 

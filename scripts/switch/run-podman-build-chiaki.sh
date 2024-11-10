@@ -6,6 +6,6 @@ podman run --rm \
 	-v "`pwd`:/build/chiaki" \
 	-w "/build/chiaki" \
 	-it \
-	localhost/chiaki-switch:latest \
+	docker.io/xlanor/chiaki-ng-switch-builder:latest \
 	/bin/bash -c "scripts/switch/build.sh"
 
