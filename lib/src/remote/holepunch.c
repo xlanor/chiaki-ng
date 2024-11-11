@@ -29,6 +29,15 @@
 #endif
 #include <windows.h>
 #include <iphlpapi.h>
+#elif defined(__SWITCH__)
+#include <unistd.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <sys/ioctl.h>
+#include <netdb.h>
+#include <ifaddrs.h>
+#include <net/if.h>
 #else
 #include <unistd.h>
 #include <netinet/in.h>
