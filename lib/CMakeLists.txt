@@ -134,9 +134,11 @@ target_include_directories(chiaki-lib PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/includ
 find_package(Threads REQUIRED)
 target_link_libraries(chiaki-lib Threads::Threads)
 
+message(STATUS "CHIAKI_ENABLE_SWITCH_JSONC is: ${CHIAKI_ENABLE_SWITCH_JSONC}")
 if (CHIAKI_ENABLE_SWITCH_JSONC)
-	find_library(JSONC_LIB curl json-c /opt/devkitpro/portlibs/switch/lib)
+	find_library(JSONC_LIB json-c /opt/devkitpro/portlibs/switch/lib)
 	target_link_libraries(chiaki-lib ${JSONC_LIB})
+	target_include_directories(chiaki-lib PUBLIC "/opt/devkitpro/portlibs/switch/include/json-c")
 else()
 	find_package(PkgConfig REQUIRED)
 	pkg_search_module(json-c REQUIRED json-c IMPORTED_TARGET)
