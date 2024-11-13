@@ -67,7 +67,7 @@ class IO
 		// default nintendo switch res
 		int screen_width = 1280;
 		int screen_height = 720;
-		AVCodec *codec;
+		const AVCodec *codec;
 		AVCodecContext *codec_context;
 		AVFrame *frame;
 		SDL_AudioDeviceID sdl_audio_device_id = 0;
