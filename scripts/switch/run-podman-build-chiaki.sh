@@ -2,8 +2,8 @@
 
 cd "`dirname $(readlink -f ${0})`/../.."
 
-podman run --rm \
-	-v "`pwd`:/build/chiaki" \
+docker run --rm \
+	-v "`pwd`:/build/chiaki":z \
 	-w "/build/chiaki" \
 	-it \
 	docker.io/xlanor/chiaki-ng-switch-builder:latest \
