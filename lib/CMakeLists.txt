@@ -150,8 +150,6 @@ pkg_search_module(MINIUPNPC REQUIRED miniupnpc IMPORTED_TARGET)
 target_link_libraries(chiaki-lib PkgConfig::MINIUPNPC)
 
 if(CHIAKI_LIB_ENABLE_MBEDTLS)
-
-
 	if (CHIAKI_IS_SWITCH) 
 		message(STATUS "CHIAKI_IS_SWITCH is: ${CHIAKI_IS_SWITCH}")
 		find_library(MBEDTLS_LIB mbedtls /opt/devkitpro/portlibs/switch/lib)
