@@ -2049,7 +2049,6 @@ static void* websocket_thread_func(void *user) {
         CHIAKI_LOGE(session->log, "Couldn't create new json tokener");
         goto cleanup;
     }
-
     const struct curl_ws_frame *meta;
     char *buf = malloc(WEBSOCKET_MAX_FRAME_SIZE);
     if(!buf)
