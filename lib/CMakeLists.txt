@@ -149,6 +149,17 @@ find_package(PkgConfig REQUIRED)
 pkg_search_module(MINIUPNPC REQUIRED miniupnpc IMPORTED_TARGET)
 target_link_libraries(chiaki-lib PkgConfig::MINIUPNPC)
 
+
+if (CHIAKI_ENABLE_SWITCH_CURL)
+  	find_library(CURL_LIB curl PATHS /opt/devkitpro/portlibs/switch/lib)
+  	target_link_libraries(chiaki-lib ${CURL_LIB})
+elseif (CHIAKI_USE_SYSTEM_CURL)
+	target_link_libraries(chiaki-lib CURL::libcurl_shared)
+else()
+	target_link_libraries(chiaki-lib CURL::libcurl_static)
+endif()
+
+
 if(CHIAKI_LIB_ENABLE_MBEDTLS)
 	if (CHIAKI_IS_SWITCH) 
 		message(STATUS "CHIAKI_IS_SWITCH is: ${CHIAKI_IS_SWITCH}")
@@ -182,15 +193,6 @@ else()
 	# default
 	find_package(OpenSSL REQUIRED)
 	target_link_libraries(chiaki-lib OpenSSL::Crypto)
-endif()
-
-if (CHIAKI_ENABLE_SWITCH_CURL)
-  	find_library(CURL_LIB curl PATHS /opt/devkitpro/portlibs/switch/lib)
-  	target_link_libraries(chiaki-lib ${CURL_LIB})
-elseif (CHIAKI_USE_SYSTEM_CURL)
-	target_link_libraries(chiaki-lib CURL::libcurl_shared)
-else()
-	target_link_libraries(chiaki-lib CURL::libcurl_static)
 endif()
 
 target_link_libraries(chiaki-lib Nanopb::nanopb)
