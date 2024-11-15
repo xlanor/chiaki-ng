@@ -127,7 +127,7 @@ if(CHIAKI_IS_SWITCH)
 	add_nro_target(chiaki
 		chiaki-borealis
 		"Chiaki-ng"
-		"StreetPea, H0neyBadger and thestr4ng3r. Updated by xlanor"
+		"StreetPea, xlanor, H0neyBadger and thestr4ng3r"
 		"${CHIAKI_VERSION}"
 		"${CMAKE_CURRENT_SOURCE_DIR}/nro_icon.jpg"
 		"${CMAKE_CURRENT_SOURCE_DIR}/res")
