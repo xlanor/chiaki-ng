@@ -7,6 +7,6 @@ docker run \
     -w "/build/chiaki" \
     -ti -p 28771:28771 \
     --entrypoint /opt/devkitpro/tools/bin/nxlink \
-    thestr4ng3r/chiaki-build-switch \
-    "$@" -s /build/chiaki/build_switch/switch/chiaki.nro
+    docker.io/xlanor/chiaki-ng-switch-builder:latest \
+    "$@" -s /build/chiaki/build_switch/switch/chiaki-ng.nro
 

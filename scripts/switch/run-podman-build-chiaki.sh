@@ -9,3 +9,8 @@ docker run --rm \
 	docker.io/xlanor/chiaki-ng-switch-builder:latest \
 	/bin/bash -c "scripts/switch/build.sh"
 
+if [[ $? -eq 0 ]]; then
+	sudo chmod -R 777 ./build_switch
+	cp build_switch/switch/chiaki.nro build_switch/switch/chiaki-ng.nro
+fi
+
