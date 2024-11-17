@@ -85,11 +85,12 @@ class EnterPinView :public brls::View
 {
 	private:
 		Host *host;
-		const uint8_t* login_pin = nullptr;
+		std::string login_pin;
 		Settings *settings;
 		ChiakiLog *log = nullptr;
+		bool isError = false;
 	public:
-		EnterPinView(Host *host);
+		EnterPinView(Host *host, bool isError);
 		~EnterPinView();
 		void ClosePinView();
 		void draw(NVGcontext *vg, int x, int y, unsigned width, unsigned height, brls::Style *style, brls::FrameContext *ctx) override;

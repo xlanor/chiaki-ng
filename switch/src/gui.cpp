@@ -283,7 +283,7 @@ void HostInterface::EnterPin(bool isError)
 	}
 	*/
 	//DIALOG(123, "Test");
-	brls::Application::pushView(new EnterPinView(this->host));
+	brls::Application::pushView(new EnterPinView(this->host, isError));
 }
 
 MainApplication::MainApplication(DiscoveryManager *discoverymanager)
@@ -609,42 +609,39 @@ PSRemotePlay::~PSRemotePlay()
 {
 }
 
-EnterPinView::EnterPinView(Host *host)
+EnterPinView::EnterPinView(Host *host, bool isError)
 	: host(host)
 {
+	this->isError = isError;
 	this->settings = Settings::GetInstance();
 	this->log = this->settings->GetLogger();
 }
+
 EnterPinView::~EnterPinView()
 {
-	brls::Application::popView();
 }
+
 void EnterPinView::ClosePinView()
 {
 	brls::Application::popView();	
 }
+
 void EnterPinView::draw(NVGcontext *vg, int x, int y, unsigned width, unsigned height, brls::Style *style, brls::FrameContext *ctx)
 {
 	// the host is not logged in yet
 	// use callback to ensure that the message is showed on screen
 	// before the Swkbd
-	auto pin_input_cb = [this](int pin) {
+	const std::string title = !this->isError ? "Please enter your login pin" : "Login PIN incorrect: please try again!";
+	auto login_pin_input_cb = [this](int pin) {
 		// prevent users form messing with the gui
-		// brls::Application::blockInputs();
-		CHIAKI_LOGI(this->log, "Fetched pin from keyboard");
-		// cast from pin to uint8_t *
-		// login pin is a c array of uint8_t *
-		uint8_t pin_buffer[PIN_MAX_LEN];
-		for(int i = 0; i < PIN_MAX_LEN; i++) {
-			pin_buffer[i] = (pin >> (i * 8)) & 0xFF;
-		}
-		const uint8_t* pin_buffer_ptr = pin_buffer;
-		this->login_pin = pin_buffer_ptr;
+		brls::Application::blockInputs();
+		std::string pin_str = std::to_string(pin);
+		this->login_pin = pin_str;
 	};
-	brls::Swkbd::openForNumber(pin_input_cb,
-		"Please enter your login pin", "4 digits without spaces", PIN_MAX_LEN, "", "", "");
+	brls::Swkbd::openForNumber(login_pin_input_cb,
+		title, "4 digits without spaces", PIN_MAX_LEN, "", "", "");
 	CHIAKI_LOGI(this->log, "Sending pin to libchiaki");
-	ChiakiErrorCode ret = chiaki_session_set_login_pin(&(this->host->session), this->login_pin, PIN_MAX_LEN);
+	ChiakiErrorCode ret = chiaki_session_set_login_pin(&(this->host->session), reinterpret_cast<const uint8_t*>(this->login_pin.c_str()), this->login_pin.length());
 	if(ret != CHIAKI_ERR_SUCCESS)	
 	{
 		brls::Application::notify(chiaki_error_string(ret));
