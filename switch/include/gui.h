@@ -27,7 +27,6 @@ class HostInterface : public brls::List
 		Host *host;
 		Settings *settings;
 		ChiakiLog *log = nullptr;
-		const uint8_t* login_pin = nullptr;
 		bool connected = false;
 
 	public:
@@ -80,4 +79,19 @@ class PSRemotePlay : public brls::View
 		void draw(NVGcontext *vg, int x, int y, unsigned width, unsigned height, brls::Style *style, brls::FrameContext *ctx) override;
 };
 
+
+
+class EnterPinView :public brls::View
+{
+	private:
+		Host *host;
+		const uint8_t* login_pin = nullptr;
+		Settings *settings;
+		ChiakiLog *log = nullptr;
+	public:
+		EnterPinView(Host *host);
+		~EnterPinView();
+		void ClosePinView();
+		void draw(NVGcontext *vg, int x, int y, unsigned width, unsigned height, brls::Style *style, brls::FrameContext *ctx) override;
+};
 #endif // CHIAKI_GUI_H

@@ -46,7 +46,7 @@ HostInterface::HostInterface(Host *host)
 	this->host->SetEventQuitCallback(std::bind(&HostInterface::CloseStream, this, std::placeholders::_1));
 	// Do not attempt to do this, leaving this comment here for posterity
 	// if you do this the second the event is sent from libchiaki it never unlocks the mutex on chiaki's end
-	//this->host->SetEventLoginPinRequestCallback(std::bind(&HostInterface::EnterPin, this, std::placeholders::_1));
+	this->host->SetEventLoginPinRequestCallback(std::bind(&HostInterface::EnterPin, this, std::placeholders::_1));
 	// allow host to update controller state
 	this->host->SetEventRumbleCallback(std::bind(&IO::SetRumble, this->io, std::placeholders::_1, std::placeholders::_2));
 	this->host->SetReadControllerCallback(std::bind(&IO::UpdateControllerState, this->io, std::placeholders::_1, std::placeholders::_2));
@@ -255,7 +255,9 @@ void HostInterface::EnterPin(bool isError)
 	// the host is not logged in yet
 	// use callback to ensure that the message is showed on screen
 	// before the Swkbd
-	auto pin_input_cb = [this](int pin) {
+	/*
+	auto pin_input_cb = [this](int pin) {:3
+
 		// prevent users form messing with the gui
 		// brls::Application::blockInputs();
 		CHIAKI_LOGI(this->log, "Entering pin loop");
@@ -269,8 +271,8 @@ void HostInterface::EnterPin(bool isError)
 		this->login_pin = pin_buffer_ptr;
 	};
 	// the pin is 4 digit
-	bool success = brls::Swkbd::openForNumber(pin_input_cb,
-		"Please enter your login pin", "4 digits without spaces", PIN_MAX_LEN, "", "", "");
+	bool success =brls::Application::pushView(brls::Swkbd::openForNumber(pin_input_cb,
+		"Please enter your login pin", "4 digits without spaces", PIN_MAX_LEN, "", "", ""));
 	if(success){
 		CHIAKI_LOGI(this->log, "Calling libchiaki to set pin");
 		ChiakiErrorCode ret = chiaki_session_set_login_pin(&(this->host->session), this->login_pin, PIN_MAX_LEN);
@@ -279,6 +281,9 @@ void HostInterface::EnterPin(bool isError)
 			brls::Application::notify(chiaki_error_string(ret));
 		}
 	}
+	*/
+	//DIALOG(123, "Test");
+	brls::Application::pushView(new EnterPinView(this->host));
 }
 
 MainApplication::MainApplication(DiscoveryManager *discoverymanager)
@@ -604,3 +609,45 @@ PSRemotePlay::~PSRemotePlay()
 {
 }
 
+EnterPinView::EnterPinView(Host *host)
+	: host(host)
+{
+	this->settings = Settings::GetInstance();
+	this->log = this->settings->GetLogger();
+}
+EnterPinView::~EnterPinView()
+{
+	brls::Application::popView();
+}
+void EnterPinView::ClosePinView()
+{
+	brls::Application::popView();	
+}
+void EnterPinView::draw(NVGcontext *vg, int x, int y, unsigned width, unsigned height, brls::Style *style, brls::FrameContext *ctx)
+{
+	// the host is not logged in yet
+	// use callback to ensure that the message is showed on screen
+	// before the Swkbd
+	auto pin_input_cb = [this](int pin) {
+		// prevent users form messing with the gui
+		// brls::Application::blockInputs();
+		CHIAKI_LOGI(this->log, "Fetched pin from keyboard");
+		// cast from pin to uint8_t *
+		// login pin is a c array of uint8_t *
+		uint8_t pin_buffer[PIN_MAX_LEN];
+		for(int i = 0; i < PIN_MAX_LEN; i++) {
+			pin_buffer[i] = (pin >> (i * 8)) & 0xFF;
+		}
+		const uint8_t* pin_buffer_ptr = pin_buffer;
+		this->login_pin = pin_buffer_ptr;
+	};
+	brls::Swkbd::openForNumber(pin_input_cb,
+		"Please enter your login pin", "4 digits without spaces", PIN_MAX_LEN, "", "", "");
+	CHIAKI_LOGI(this->log, "Sending pin to libchiaki");
+	ChiakiErrorCode ret = chiaki_session_set_login_pin(&(this->host->session), this->login_pin, PIN_MAX_LEN);
+	if(ret != CHIAKI_ERR_SUCCESS)	
+	{
+		brls::Application::notify(chiaki_error_string(ret));
+	}
+	this->ClosePinView();
+}

@@ -92,6 +92,7 @@ class Host
 		friend class DiscoveryManager;
 		// allows session to be passed to gui
 		friend class HostInterface;
+		friend class EnterPinView;
 
 	public:
 		Host(std::string host_name);
@@ -115,7 +116,7 @@ class Host
 		void SetRegistEventTypeFinishedFailed(std::function<void()> chiaki_regist_event_type_finished_failed);
 		void SetRegistEventTypeFinishedSuccess(std::function<void()> chiaki_regist_event_type_finished_success);
 		void SetEventConnectedCallback(std::function<void()> chiaki_event_connected_cb);
-void Host::SetEventLoginPinRequestCallback(std::function<std::future<void>(bool)> chiaki_even_login_pin_request_cb);
+		void SetEventLoginPinRequestCallback(std::function<void(bool)> chiaki_even_login_pin_request_cb);
 		void SetEventRumbleCallback(std::function<void(uint8_t, uint8_t)> chiaki_event_rumble_cb);
 		void SetEventQuitCallback(std::function<void(ChiakiQuitEvent *)> chiaki_event_quit_cb);
 		void SetReadControllerCallback(std::function<void(ChiakiControllerState *, std::map<uint32_t, int8_t> *)> io_read_controller_cb);
