@@ -18,6 +18,7 @@
 #include "host.h"
 #include "io.h"
 #include "settings.h"
+#include <future>
 
 class HostInterface : public brls::List
 {
@@ -25,6 +26,8 @@ class HostInterface : public brls::List
 		IO *io;
 		Host *host;
 		Settings *settings;
+		ChiakiLog *log = nullptr;
+		const uint8_t* login_pin = nullptr;
 		bool connected = false;
 
 	public:
@@ -38,6 +41,7 @@ class HostInterface : public brls::List
 		void ConnectSession();
 		void Disconnect();
 		void Stream();
+		void EnterPin(bool isError);
 		void CloseStream(ChiakiQuitEvent *quit);
 };
 

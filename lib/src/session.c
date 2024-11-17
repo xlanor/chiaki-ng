@@ -183,7 +183,7 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_session_init(ChiakiSession *session, Chiaki
 	ChiakiErrorCode err = chiaki_cond_init(&session->state_cond);
 	if(err != CHIAKI_ERR_SUCCESS)
 		goto error;
-
+		
 	err = chiaki_mutex_init(&session->state_mutex, false);
 	if(err != CHIAKI_ERR_SUCCESS)
 		goto error_state_cond;
@@ -336,17 +336,34 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_session_set_controller_state(ChiakiSession 
 
 CHIAKI_EXPORT ChiakiErrorCode chiaki_session_set_login_pin(ChiakiSession *session, const uint8_t *pin, size_t pin_size)
 {
+	CHIAKI_LOGI(session->log, "Called session_set_login_pin" );
 	uint8_t *buf = malloc(pin_size);
-	if(!buf)
+	if(!buf){
+		CHIAKI_LOGE(session->log, "Could not allocate memory of %zu", pin_size);
 		return CHIAKI_ERR_MEMORY;
+	}
 	memcpy(buf, pin, pin_size);
+	int status = pthread_mutex_trylock(&session->state_mutex.mutex);
+	if (status == 0) {
+		// Mutex was valid and we got the lock
+		pthread_mutex_unlock(&session->state_mutex.mutex);
+	} else if (status == EBUSY) {
+		// Mutex is valid but locked
+		CHIAKI_LOGI(session->log, "Mutex is locked");
+	} else {
+		// Mutex might be uninitialized or corrupted
+		CHIAKI_LOGI(session->log, "Mutex might be invalid, status: %d", status);
+	}
+	CHIAKI_LOGI(session->log, "Preparing to lock chiaki mutex to update state");
 	ChiakiErrorCode err = chiaki_mutex_lock(&session->state_mutex);
-	assert(err == CHIAKI_ERR_SUCCESS);
+	CHIAKI_LOGI(session->log, "Chiaki code err %s", chiaki_error_string(err));
+	assert(err == CHIAKI_ERR_SUCCESS);										
 	if(session->login_pin_entered)
 		free(session->login_pin);
 	session->login_pin_entered = true;
 	session->login_pin = buf;
 	session->login_pin_size = pin_size;
+	CHIAKI_LOGI(session->log, "Session pin size set to, %zu", session->login_pin_size );
 	chiaki_mutex_unlock(&session->state_mutex);
 	chiaki_cond_signal(&session->state_cond);
 	return CHIAKI_ERR_SUCCESS;
@@ -523,8 +540,9 @@ static void *session_thread_func(void *arg)
 		event.login_pin_request.pin_incorrect = pin_incorrect;
 		chiaki_session_send_event(session, &event);
 		pin_incorrect = true;
-
+		CHIAKI_LOGI(session->log, "Unlocking state mutex");
 		err = chiaki_cond_timedwait_pred(&session->state_cond, &session->state_mutex, UINT64_MAX, session_check_state_pred_pin, session);
+		CHIAKI_LOGI(session->log, "timedwait over, reacquiring state mutex");
 		CHECK_STOP(quit_ctrl);
 		if(session->ctrl_failed)
 		{
@@ -539,7 +557,6 @@ static void *session_thread_func(void *arg)
 		free(session->login_pin);
 		session->login_pin = NULL;
 		session->login_pin_size = 0;
-
 		// wait for session id or new login pin request
 		err = chiaki_cond_timedwait_pred(&session->state_cond, &session->state_mutex, SESSION_EXPECT_TIMEOUT_MS, session_check_state_pred_ctrl_start, session);
 		CHECK_STOP(quit_ctrl);
