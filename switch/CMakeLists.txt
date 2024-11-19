@@ -2,7 +2,21 @@
 ##################
 # borealis dependency
 ##################
+# Dependencies
 
+# Sets the minimum version of CMake required to build the native library.
+add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-std=gnu++20>)
+
+file(GLOB_RECURSE BOREALIS_SOURCES
+    "borealis/library/extern/yoga/yoga/*.cpp"
+    "borealis/library/extern/tweeny/*.cc"
+    "borealis/library/extern/switch-libpulsar/src/*.c"
+    "borealis/library/lib/views/cells/*.cpp"
+    "borealis/library/lib/views/widgets/*.cpp"
+	"borealis/library/lib/core/*.cpp"
+	"borealis/library/lib/platforms/switch/*.cpp"
+	"borealis/library/lib/views/*.cpp"
+)
 # do not include
 # borealis/library/lib/switch_wrapper.c
 # switch functions are in switch/src/main.cpp
@@ -10,54 +24,38 @@ set(BOREALIS_SOURCE
     borealis/library/lib/extern/libretro-common/features/features_cpu.c
     borealis/library/lib/extern/libretro-common/encodings/encoding_utf.c
     borealis/library/lib/extern/libretro-common/compat/compat_strl.c
-    borealis/library/lib/extern/nxfmtwrapper/format.cpp
     borealis/library/lib/extern/nanovg/nanovg.c
+    borealis/library/lib/extern/tinyxml2/tinyxml2.cpp
     borealis/library/lib/extern/glad/glad.c
-    borealis/library/lib/scroll_view.cpp
-    borealis/library/lib/style.cpp
-    borealis/library/lib/table.cpp
-    borealis/library/lib/task_manager.cpp
-    borealis/library/lib/progress_display.cpp
-    borealis/library/lib/staged_applet_frame.cpp
-    borealis/library/lib/applet_frame.cpp
-    borealis/library/lib/hint.cpp
-    borealis/library/lib/image.cpp
-    borealis/library/lib/logger.cpp
-    borealis/library/lib/swkbd.cpp
-    borealis/library/lib/crash_frame.cpp
-    borealis/library/lib/header.cpp
-    borealis/library/lib/progress_spinner.cpp
-    borealis/library/lib/layer_view.cpp
-    borealis/library/lib/notification_manager.cpp
-    borealis/library/lib/rectangle.cpp
-    borealis/library/lib/application.cpp
-    borealis/library/lib/box_layout.cpp
-    borealis/library/lib/sidebar.cpp
-    borealis/library/lib/dropdown.cpp
-    borealis/library/lib/popup_frame.cpp
-    borealis/library/lib/repeating_task.cpp
-    borealis/library/lib/absolute_layout.cpp
-    borealis/library/lib/i18n.cpp
-    borealis/library/lib/tab_frame.cpp
-    borealis/library/lib/thumbnail_frame.cpp
-    borealis/library/lib/animations.cpp
-    borealis/library/lib/dialog.cpp
-    borealis/library/lib/view.cpp
-    borealis/library/lib/list.cpp
-    borealis/library/lib/button.cpp
-    borealis/library/lib/label.cpp
-    borealis/library/lib/theme.cpp
-    borealis/library/lib/material_icon.cpp)
+	borealis/library/lib/extern/nxfmtwrapper/format.cpp
+	${BOREALIS_SOURCES}
+	borealis/library/lib/core/touch/tap_gesture.cpp
+	borealis/library/lib/core/touch/scroll_gesture.cpp
+	borealis/library/lib/core/touch/pan_gesture.cpp
+)
 
 add_library(borealis STATIC ${BOREALIS_SOURCE})
-set_property(TARGET borealis PROPERTY CXX_STANDARD 17)
+set_property(TARGET borealis PROPERTY CXX_STANDARD 20)
+target_include_directories(borealis PRIVATE
+)
 target_include_directories(borealis PUBLIC
 	borealis/library/include
     borealis/library/include/borealis/extern
+	borealis/library/lib/extern/yoga
+	borealis/library/lib/extern/tweeny/include
+	borealis/library/lib/extern/fmt/include
+	borealis/library/lib/extern/tweeny/include
+	borealis/library/lib/extern/switch-libpulsar/include
 	borealis/library/include/borealis/extern/glad
 	borealis/library/include/borealis/extern/nanovg
+	borealis/library/include/borealis/extern/tinyxml2
 	borealis/library/include/borealis/extern/libretro-common
-	borealis/library/lib/extern/fmt/include)
+    borealis/library/include/borealis/core
+    borealis/library/include/borealis/platforms/switch
+    borealis/library/include/borealis/views
+    borealis/library/include/borealis/views/cells
+    borealis/library/include/borealis/views/widgets
+)
 
 find_package(glfw3 REQUIRED)
 find_library(EGL EGL)
@@ -85,6 +83,8 @@ endif()
 find_package(FFMPEG REQUIRED COMPONENTS avcodec avutil swscale)
 find_library(SDL2 SDL2)
 find_library(SWRESAMPLE swresample)
+
+add_definitions(-DBRLS_RESOURCES="borealis/resources/" -DYG_ENABLE_EVENTS)
 
 # find -type f | grep -P '\.(h|cpp)$' | sed 's#\./#\t\t#g'
 add_executable(chiaki-borealis WIN32

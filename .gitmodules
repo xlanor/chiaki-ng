@@ -15,7 +15,10 @@
 	url = https://github.com/google/oboe
 [submodule "switch/borealis"]
 	path = switch/borealis
-	url = https://git.sr.ht/~thestr4ng3r/borealis
+	# Using  XITRIX/borealis but making sure that we 
+	# dont break things unintentionally and can control patches
+	url = https://github.com/xlanor/borealis
+	branch = moonlight_wiliwili
 [submodule "third-party/curl"]
 	path = third-party/curl
 	url = https://github.com/curl/curl
