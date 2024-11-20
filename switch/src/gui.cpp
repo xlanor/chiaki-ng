@@ -303,10 +303,12 @@ bool MainApplication::Load()
 
 	brls::List *config = new brls::List();
 	brls::List *add_host = new brls::List();
+	brls::List *discovery = new brls::List();
 
 	BuildConfigurationMenu(config);
 	BuildAddHostConfigurationMenu(add_host);
 	this->rootFrame->addTab("Configuration", config);
+	this->rootFrame->addTab("Discovery", discovery);
 	this->rootFrame->addTab("Add Host", add_host);
 	// ----------------
 	this->rootFrame->addSeparator();
@@ -390,6 +392,22 @@ bool MainApplication::BuildConfigurationMenu(brls::List *ls, Host *host)
 
 	auto resolution_cb = [this, host](int result) {
 		ChiakiVideoResolutionPreset value = CHIAKI_VIDEO_RESOLUTION_PRESET_720p;
+
+		// temporarily disable 1080p.
+		// testing on stock switch v1 w/ fw 18.1 indicates that - below stack trace happens on 1080p60
+		// and on 1080p30 you get an image that barely runs because half the frames get dropped.
+		// I do not know enough about av io to debug further, but will disable first
+		// underlying code is not disabled, so users can still set 1080p manually in config.
+		/**
+		* [I] Switched to profile 0, resolution: 1920x1080
+		*	[E] Failed to pull frame
+		*	[AVHWFramesContext @ 0x7524613d20] Failed to create buffer
+		*	[hevc @ 0x7524629530] get_buffer() failed
+		*	[hevc @ 0x7524629530] thread_get_buffer() failed
+		*	[hevc @ 0x7524629530] Error parsing NAL unit #0.
+		*	[E] Failed to push frame: Not enough space
+		*/
+		if (result == 0) result = 1;
 		switch(result)
 		{
 			case 0:
