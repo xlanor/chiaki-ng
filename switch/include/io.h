@@ -71,7 +71,7 @@ class IO
 		int screen_height = 720;
 		const AVCodec *codec;
 		AVCodecContext *codec_context;
-		AVFrame *frames[MAX_FRAME_COUNT];
+		AVFrame **frames;
 		AVFrame *tmp_frame;
 		SDL_AudioDeviceID sdl_audio_device_id = 0;
 		SDL_Event sdl_event;

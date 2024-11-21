@@ -205,14 +205,14 @@ void IO::DumpProgramError(GLuint prog, const char *func, const char *file, int l
 bool IO::VideoCB(uint8_t *buf, size_t buf_size, int32_t frames_lost, bool frame_recovered, void *user)
 {
 	// callback function to decode video buffer
-
-	AVPacket* packet = av_packet_alloc();
-	packet->data = buf;
-	packet->size = buf_size;
+	AVPacket packet;
+	av_init_packet(&packet);
+	packet.data = buf;
+	packet.size = buf_size;
 
 send_packet:
 	// Push
-	int r = avcodec_send_packet(this->codec_context, packet);
+	int r = avcodec_send_packet(this->codec_context, &packet);
 	if(r != 0)
 	{
 		if(r == AVERROR(EAGAIN))
@@ -223,7 +223,7 @@ send_packet:
 			if(r != 0)
 			{
 				CHIAKI_LOGE(this->log, "Failed to pull frame");
-				av_packet_free(&packet);
+				av_packet_unref(&packet);
 				return false;
 			}
 			goto send_packet;
@@ -233,7 +233,7 @@ send_packet:
 			char errbuf[128];
 			av_make_error_string(errbuf, sizeof(errbuf), r);
 			CHIAKI_LOGE(this->log, "Failed to push frame: %s", errbuf);
-			av_packet_free(&packet);
+			av_packet_unref(&packet);
 			return false;
 		}
 	}
@@ -260,7 +260,7 @@ send_packet:
 		next_frame = (next_frame + 1) % MAX_FRAME_COUNT;
 	}
 
-	av_packet_free(&packet);
+	av_packet_unref(&packet);
 	return true;
 }
 
@@ -344,6 +344,8 @@ bool IO::InitVideo(int video_width, int video_height, int screen_width, int scre
 
 	this->screen_width = screen_width;
 	this->screen_height = screen_height;
+	this->frames = (AVFrame**)malloc(MAX_FRAME_COUNT * sizeof(AVFrame*));
+
 	for (int i = 0; i < MAX_FRAME_COUNT; i++) {
 			frames[i] = av_frame_alloc();
 			if (frames[i] == NULL) {
