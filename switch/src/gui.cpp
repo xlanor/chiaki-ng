@@ -272,7 +272,6 @@ MainApplication::~MainApplication()
 
 bool MainApplication::Load()
 {
-	this->discoverymanager->SetService(true);
 	// Init the app
 	brls::Logger::setLogLevel(brls::LogLevel::DEBUG);
 
@@ -303,11 +302,14 @@ bool MainApplication::Load()
 
 	brls::List *config = new brls::List();
 	brls::List *add_host = new brls::List();
+	brls::List *discovery = new brls::List();
 
 	BuildConfigurationMenu(config);
 	BuildAddHostConfigurationMenu(add_host);
+	BuildDiscoveryMenu(discovery);
 	this->rootFrame->addTab("Configuration", config);
 	this->rootFrame->addTab("Add Host", add_host);
+	this->rootFrame->addTab("Discovery", discovery);
 	// ----------------
 	this->rootFrame->addSeparator();
 
@@ -589,6 +591,21 @@ void MainApplication::BuildAddHostConfigurationMenu(brls::List *add_host)
 	add_host->addView(register_host);
 }
 
+void MainApplication::BuildDiscoveryMenu(brls::List *discovery_menu) 
+{
+	brls::Label *info = new brls::Label(brls::LabelStyle::REGULAR,
+		"Discovery Configuration", true);
+	discovery_menu->addView(info);
+	brls::ListItem *begin_discovery = new brls::ListItem("Discover");
+	auto discovery_menu_cb = [this ](brls::View *view) {
+		// start discovery.
+		this->discoverymanager->SetService(true);
+	};
+	begin_discovery->getClickEvent()->subscribe(discovery_menu_cb);
+	discovery_menu->addView(begin_discovery);
+	discovery_menu->addView(new DiscoverView(this->discoverymanager));
+}
+
 PSRemotePlay::PSRemotePlay(Host *host)
 	: host(host)
 {
@@ -646,4 +663,21 @@ void EnterPinView::draw(NVGcontext *vg, int x, int y, unsigned width, unsigned h
 		brls::Application::notify(chiaki_error_string(ret));
 	}
 	this->ClosePinView();
+}
+
+DiscoverView::DiscoverView(DiscoveryManager* discoveryManager)
+	: discoveryManager(discoveryManager)
+{
+	this->discoveryManager = discoveryManager;
+	this->settings = Settings::GetInstance();
+	this->log = this->settings->GetLogger();
+}
+
+DiscoverView::~DiscoverView()
+{
+	brls::Application::popView();
+}
+void DiscoverView::draw(NVGcontext *vg, int x, int y, unsigned width, unsigned height, brls::Style *style, brls::FrameContext *ctx)
+{
+
 }

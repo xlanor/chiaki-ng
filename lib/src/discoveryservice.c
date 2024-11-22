@@ -22,13 +22,14 @@ static void discovery_service_report_state(ChiakiDiscoveryService *service);
 
 CHIAKI_EXPORT ChiakiErrorCode chiaki_discovery_service_init(ChiakiDiscoveryService *service, ChiakiDiscoveryServiceOptions *options, ChiakiLog *log)
 {
+	CHIAKI_LOGI(log, "Discovery service called");
 	service->log = log;
 	service->options = *options;
 	service->ping_index = 0;
 
 	service->hosts = calloc(service->options.hosts_max, sizeof(ChiakiDiscoveryHost));
 	if(!service->hosts){
-		CHIAKI_LOGE(service->log, "failed in host calloc");
+		CHIAKI_LOGE(log, "failed in host calloc");
 		return CHIAKI_ERR_MEMORY;
 	}
 
@@ -36,7 +37,7 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_discovery_service_init(ChiakiDiscoveryServi
 	service->host_discovery_infos = calloc(service->options.hosts_max, sizeof(ChiakiDiscoveryServiceHostDiscoveryInfo));
 	if(!service->host_discovery_infos)
 	{
-		CHIAKI_LOGE(service->log, "failed in host_discovery_infos");
+		CHIAKI_LOGE(log, "failed in host_discovery_infos");
 		err = CHIAKI_ERR_MEMORY;
 		goto error_hosts;
 	}
@@ -50,7 +51,7 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_discovery_service_init(ChiakiDiscoveryServi
 	service->options.send_addr = malloc(service->options.send_addr_size);
 	if(!service->options.send_addr)
 	{
-		CHIAKI_LOGE(service->log, "failed in send_addr");
+		CHIAKI_LOGE(log, "failed in send_addr");
 		err = CHIAKI_ERR_MEMORY;
 		goto error_state_mutex;
 	}
@@ -63,7 +64,7 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_discovery_service_init(ChiakiDiscoveryServi
 		service->options.broadcast_addrs = malloc(service->options.broadcast_num * sizeof(struct sockaddr_storage));
 		if(!service->options.broadcast_addrs)
 		{
-			CHIAKI_LOGE(service->log, "failed in broadcast_addrs");
+			CHIAKI_LOGE(log, "failed in broadcast_addrs");
 			err = CHIAKI_ERR_MEMORY;
 			goto error_state_mutex;
 		}
@@ -75,7 +76,7 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_discovery_service_init(ChiakiDiscoveryServi
 		service->options.send_host = strdup(service->options.send_host);
 		if(!service->options.send_host)
 		{
-		CHIAKI_LOGE(service->log, "failed in send_host");
+		CHIAKI_LOGE(log, "failed in send_host");
 			err = CHIAKI_ERR_MEMORY;
 			goto error_send_addr;
 		}

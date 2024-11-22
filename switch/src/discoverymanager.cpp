@@ -25,10 +25,43 @@ static void Discovery(ChiakiDiscoveryHost *discovered_hosts, size_t hosts_count,
 	}
 }
 
+void print_ifaddrs(const IfAddrs& addrs, ChiakiLog* log)
+{
+    char local_ip[INET_ADDRSTRLEN];
+    char broadcast_ip[INET_ADDRSTRLEN];
+    
+    // Convert local IP to string
+    if(inet_ntop(AF_INET, &(addrs.local), local_ip, INET_ADDRSTRLEN) != NULL)
+    {
+        CHIAKI_LOGI(log, "Local IP Address: %s", local_ip);
+    }
+    else
+    {
+        CHIAKI_LOGI(log, "Error converting local IP address");
+    }
+    
+    // Convert broadcast IP to string
+    if(inet_ntop(AF_INET, &(addrs.broadcast), broadcast_ip, INET_ADDRSTRLEN) != NULL)
+    {
+        CHIAKI_LOGI(log, "Broadcast IP Address: %s", broadcast_ip);
+    }
+    else
+    {
+        CHIAKI_LOGI(log, "Error converting broadcast IP address");
+    }
+    
+    // Print raw values in hex for debugging
+    CHIAKI_LOGI(log, "Raw Values (hex):");
+    CHIAKI_LOGI(log, "Local: 0x%08X", addrs.local);
+    CHIAKI_LOGI(log, "Broadcast: 0x%08X", addrs.broadcast);
+}
+
 DiscoveryManager::DiscoveryManager()
 {
 	this->settings = Settings::GetInstance();
 	this->log = this->settings->GetLogger();
+	// libchiaki uses log,
+	this->service.log = this->log;
 }
 
 DiscoveryManager::~DiscoveryManager()
@@ -48,6 +81,7 @@ void DiscoveryManager::SetService(bool enable)
 	if(enable)
 	{
 		IfAddrs addresses = GetIPv4BroadcastAddr();
+		print_ifaddrs(addresses, this->log);
 		ChiakiDiscoveryServiceOptions options;
 		options.ping_ms = PING_MS;
 		options.hosts_max = HOSTS_MAX;
@@ -58,13 +92,14 @@ void DiscoveryManager::SetService(bool enable)
 		addr_broadcast.sin_family = AF_INET;
 		addr_broadcast.sin_addr.s_addr = addresses.broadcast;
 		options.broadcast_addrs = (struct sockaddr_storage *)malloc(1 * sizeof(struct sockaddr_storage));
-		memcpy(options.broadcast_addrs, &addr_broadcast, sizeof(addr_broadcast));		options.broadcast_num = 1;
+		memcpy(options.broadcast_addrs, &addr_broadcast, sizeof(addr_broadcast));		
+		options.broadcast_num = 1;
 		sockaddr_in addr = {};
 		addr.sin_family = AF_INET;
 		addr.sin_addr.s_addr = addresses.local;
 		options.send_addr = reinterpret_cast<sockaddr_storage *>(&addr);
 		options.send_addr_size = sizeof(addr);
-
+		CHIAKI_LOGI(this->log, "initialise discovery");
 		ChiakiErrorCode err = chiaki_discovery_service_init(&this->service, &options, log);
 		if(err != CHIAKI_ERR_SUCCESS)
 		{	

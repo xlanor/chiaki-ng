@@ -55,6 +55,7 @@ class MainApplication
 
 		bool BuildConfigurationMenu(brls::List *, Host *host = nullptr);
 		void BuildAddHostConfigurationMenu(brls::List *);
+		void BuildDiscoveryMenu(brls::List *discovery_menu);
 
 	public:
 		MainApplication(DiscoveryManager *discoverymanager);
@@ -92,6 +93,19 @@ class EnterPinView :public brls::View
 		EnterPinView(Host *host, bool isError);
 		~EnterPinView();
 		void ClosePinView();
+		void draw(NVGcontext *vg, int x, int y, unsigned width, unsigned height, brls::Style *style, brls::FrameContext *ctx) override;
+};
+
+
+class DiscoverView :public brls::View
+{
+	private:
+		Settings *settings;
+		DiscoveryManager* discoveryManager;
+		ChiakiLog *log = nullptr;
+	public:
+		DiscoverView(DiscoveryManager* discoveryManager);
+		~DiscoverView();
 		void draw(NVGcontext *vg, int x, int y, unsigned width, unsigned height, brls::Style *style, brls::FrameContext *ctx) override;
 };
 #endif // CHIAKI_GUI_H

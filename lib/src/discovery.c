@@ -140,6 +140,8 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_discovery_srch_response_parse(ChiakiDiscove
 
 CHIAKI_EXPORT ChiakiErrorCode chiaki_discovery_init(ChiakiDiscovery *discovery, ChiakiLog *log, sa_family_t family)
 {
+	
+	CHIAKI_LOGI(discovery-> log, "Discovery init called");
 	if(family != AF_INET && family != AF_INET6)
 		return CHIAKI_ERR_INVALID_DATA;
 
