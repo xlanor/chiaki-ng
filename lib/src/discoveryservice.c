@@ -29,7 +29,7 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_discovery_service_init(ChiakiDiscoveryServi
 
 	service->hosts = calloc(service->options.hosts_max, sizeof(ChiakiDiscoveryHost));
 	if(!service->hosts){
-		CHIAKI_LOGE(log, "failed in host calloc");
+		CHIAKI_LOGE(service->log, "failed in host calloc");
 		return CHIAKI_ERR_MEMORY;
 	}
 
@@ -37,7 +37,7 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_discovery_service_init(ChiakiDiscoveryServi
 	service->host_discovery_infos = calloc(service->options.hosts_max, sizeof(ChiakiDiscoveryServiceHostDiscoveryInfo));
 	if(!service->host_discovery_infos)
 	{
-		CHIAKI_LOGE(log, "failed in host_discovery_infos");
+		CHIAKI_LOGE(service->log, "failed in host_discovery_infos");
 		err = CHIAKI_ERR_MEMORY;
 		goto error_hosts;
 	}
@@ -51,7 +51,7 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_discovery_service_init(ChiakiDiscoveryServi
 	service->options.send_addr = malloc(service->options.send_addr_size);
 	if(!service->options.send_addr)
 	{
-		CHIAKI_LOGE(log, "failed in send_addr");
+		CHIAKI_LOGE(service->log, "failed in send_addr");
 		err = CHIAKI_ERR_MEMORY;
 		goto error_state_mutex;
 	}
@@ -64,7 +64,7 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_discovery_service_init(ChiakiDiscoveryServi
 		service->options.broadcast_addrs = malloc(service->options.broadcast_num * sizeof(struct sockaddr_storage));
 		if(!service->options.broadcast_addrs)
 		{
-			CHIAKI_LOGE(log, "failed in broadcast_addrs");
+			CHIAKI_LOGE(service->log, "failed in broadcast_addrs");
 			err = CHIAKI_ERR_MEMORY;
 			goto error_state_mutex;
 		}
@@ -76,7 +76,7 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_discovery_service_init(ChiakiDiscoveryServi
 		service->options.send_host = strdup(service->options.send_host);
 		if(!service->options.send_host)
 		{
-		CHIAKI_LOGE(log, "failed in send_host");
+		CHIAKI_LOGE(service->log, "failed in send_host");
 			err = CHIAKI_ERR_MEMORY;
 			goto error_send_addr;
 		}
@@ -98,18 +98,24 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_discovery_service_init(ChiakiDiscoveryServi
 
 	return CHIAKI_ERR_SUCCESS;
 error_stop_cond:
+	CHIAKI_LOGI(log, "ERROR: STOP_THREAD");
 	chiaki_bool_pred_cond_fini(&service->stop_cond);
 error_discovery:
+	CHIAKI_LOGI(log, "ERROR: STOP_DISCOVERY");
 	chiaki_discovery_fini(&service->discovery);
 error_send_addr:
+	CHIAKI_LOGI(log, "ERROR: SEND_ADDR");
 	free(service->options.broadcast_addrs);
 	free(service->options.send_addr);
 	free(service->options.send_host);
 error_state_mutex:
+	CHIAKI_LOGI(log, "ERROR: STATE_MUTEX");
 	chiaki_mutex_fini(&service->state_mutex);
 error_host_discovery_infos:
+	CHIAKI_LOGI(log, "ERROR: DISCOVERY_INFOS");
 	free(service->host_discovery_infos);
 error_hosts:
+	CHIAKI_LOGI(log, "ERROR: HOSTS");
 	free(service->hosts);
 	return err;
 }
@@ -142,23 +148,28 @@ static void *discovery_service_thread_func(void *user)
 {
 	ChiakiDiscoveryService *service = user;
 
+	CHIAKI_LOGI(service->log, "Locking thread");
 	ChiakiErrorCode err = chiaki_bool_pred_cond_lock(&service->stop_cond);
 	if(err != CHIAKI_ERR_SUCCESS)
 		return NULL;
 
 	ChiakiDiscoveryThread discovery_thread;
+	CHIAKI_LOGI(service->log, "Starting discovery thread");
 	err = chiaki_discovery_thread_start(&discovery_thread, &service->discovery, discovery_service_host_received, service);
 	if(err != CHIAKI_ERR_SUCCESS)
 		goto beach;
 
+	CHIAKI_LOGI(service->log, "Starting timedwait thread");
 	err = chiaki_bool_pred_cond_timedwait(&service->stop_cond, service->options.ping_initial_ms);
 
 	while(err == CHIAKI_ERR_TIMEOUT)
 	{
+		CHIAKI_LOGI(service->log, "Pinging discovery");
 		discovery_service_ping(service);
 		err = chiaki_bool_pred_cond_timedwait(&service->stop_cond, service->options.ping_ms);
 	}
 
+	CHIAKI_LOGI(service->log, "Stopping discovery thread");
 	chiaki_discovery_thread_stop(&discovery_thread);
 
 beach:

@@ -141,7 +141,7 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_discovery_srch_response_parse(ChiakiDiscove
 CHIAKI_EXPORT ChiakiErrorCode chiaki_discovery_init(ChiakiDiscovery *discovery, ChiakiLog *log, sa_family_t family)
 {
 	
-	CHIAKI_LOGI(discovery-> log, "Discovery init called");
+	CHIAKI_LOGI(log, "Discovery init called");
 	if(family != AF_INET && family != AF_INET6)
 		return CHIAKI_ERR_INVALID_DATA;
 
@@ -159,6 +159,7 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_discovery_init(ChiakiDiscovery *discovery, 
 	int r;
 	while(true)
 	{
+		CHIAKI_LOGI(log, "Discovery port called");
 		memset(&discovery->local_addr, 0, sizeof(discovery->local_addr));
 		((struct sockaddr *)&discovery->local_addr)->sa_family = family;
 		socklen_t len = 0;
@@ -213,6 +214,7 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_discovery_init(ChiakiDiscovery *discovery, 
 	}
 
 	const int broadcast = 1;
+	CHIAKI_LOGI(log, "Discovery broadcast called");
 	r = setsockopt(discovery->socket, SOL_SOCKET, SO_BROADCAST, (const void *)&broadcast, sizeof(broadcast));
 	if(r < 0)
 		CHIAKI_LOGE(discovery->log, "Discovery failed to setsockopt SO_BROADCAST");
