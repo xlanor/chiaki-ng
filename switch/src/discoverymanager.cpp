@@ -95,11 +95,18 @@ void DiscoveryManager::SetService(bool enable)
 		options.broadcast_addrs = (struct sockaddr_storage *)malloc(sizeof(struct sockaddr_storage));
 		memcpy(options.broadcast_addrs, &addr_broadcast, sizeof(addr_broadcast));		
 		options.broadcast_num = 1;
-		sockaddr_in addr = {};
-		addr.sin_family = AF_INET;
-		addr.sin_addr.s_addr = addresses.local;
-		options.send_addr = reinterpret_cast<sockaddr_storage *>(&addr);
-		options.send_addr_size = sizeof(addr);
+
+			
+        // Base broadcast address (255.255.255.255)
+        struct sockaddr_in in_addr = {};
+        in_addr.sin_family = AF_INET;
+        in_addr.sin_addr.s_addr = 0xffffffff;
+        struct sockaddr_storage addr;
+        memcpy(&addr, &in_addr, sizeof(in_addr));
+        options.send_addr = &addr;
+        options.send_addr_size = sizeof(in_addr);
+        options.send_host = nullptr;
+		
 		CHIAKI_LOGI(this->log, "initialise discovery");
 		ChiakiErrorCode err = chiaki_discovery_service_init(&this->service, &options, log);
 		if(err != CHIAKI_ERR_SUCCESS)

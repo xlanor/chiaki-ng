@@ -197,7 +197,7 @@ static void discovery_service_ping(ChiakiDiscoveryService *service)
 		int r = getaddrinfo(service->options.send_host, NULL, &hints, &host_addrinfos);
 		if(r != 0)
 		{
-			CHIAKI_LOGE(service->log, "getaddrinfo failed");
+			CHIAKI_LOGE(service->log, "getaddrinfo failed, %d", r);
 			return;
 		}
 
