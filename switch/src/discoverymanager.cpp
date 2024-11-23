@@ -84,6 +84,7 @@ void DiscoveryManager::SetService(bool enable)
 		print_ifaddrs(addresses, this->log);
 		ChiakiDiscoveryServiceOptions options;
 		options.ping_ms = PING_MS;
+		options.ping_initial_ms = PING_MS;
 		options.hosts_max = HOSTS_MAX;
 		options.host_drop_pings = DROP_PINGS;
 		options.cb = Discovery;
@@ -91,7 +92,7 @@ void DiscoveryManager::SetService(bool enable)
 		sockaddr_in addr_broadcast = {};
 		addr_broadcast.sin_family = AF_INET;
 		addr_broadcast.sin_addr.s_addr = addresses.broadcast;
-		options.broadcast_addrs = (struct sockaddr_storage *)malloc(1 * sizeof(struct sockaddr_storage));
+		options.broadcast_addrs = (struct sockaddr_storage *)malloc(sizeof(struct sockaddr_storage));
 		memcpy(options.broadcast_addrs, &addr_broadcast, sizeof(addr_broadcast));		
 		options.broadcast_num = 1;
 		sockaddr_in addr = {};
