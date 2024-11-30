@@ -23,6 +23,25 @@ using namespace brls::i18n::literals; // for _i18n
 	d_##dialog->open();                                                         \
 	brls::Logger::info("Dialog: {0}", r);
 
+
+static const std::string CLIENT_ID = "ba495a24-818c-472b-b12d-ff231c1b5745";
+static const std::string CLIENT_SECRET = "mvaiZkRsAsI1IBkY";
+static const std::string LOGIN_URL = 
+    "https://auth.api.sonyentertainmentnetwork.com/2.0/oauth/authorize"
+    "?service_entity=urn:service-entity:psn"
+    "&response_type=code"
+    "&client_id=" + CLIENT_ID +
+    "&redirect_uri=https://remoteplay.dl.playstation.net/remoteplay/redirect"
+    "&scope=psn:clientapp referenceDataService:countryConfig.read pushNotification:webSocket.desktop.connect"
+    " sessionManager:remotePlaySession.system.update"
+    "&request_locale=en_US"
+    "&ui=pr"
+    "&service_logo=ps"
+    "&layout_type=popup"
+    "&smcid=remoteplay"
+    "&prompt=always"
+    "&PlatformPrivacyWs1=minimal&";
+
 HostInterface::HostInterface(Host *host)
 	: host(host)
 {
@@ -389,6 +408,7 @@ bool MainApplication::BuildConfigurationMenu(brls::List *ls, Host *host)
 	ls->addView(lookup_account_id);
 
 
+
 	std::string psn_online_id_string = this->settings->GetPSNOnlineID(host);
 	brls::InputListItem *psn_online_id = new brls::InputListItem("PSN Online ID",
 		psn_online_id_string, "", "", 16,
@@ -407,7 +427,26 @@ bool MainApplication::BuildConfigurationMenu(brls::List *ls, Host *host)
 	psn_online_id->getClickEvent()->subscribe(psn_online_id_cb);
 	ls->addView(psn_online_id);
 
+	brls::Button* loginPsn = (new brls::Button(brls::ButtonStyle::BORDERLESS))->setLabel("Login to PSN");
+ 	loginPsn->setParent(ls);
+    loginPsn->getClickEvent()->subscribe([ls, this](brls::View* view) {
+		CHIAKI_LOGE(this->log, "CLICKED!");
+		int rc;
+		WebCommonConfig conf;
+        WebCommonReply out;
+        rc = webPageCreate(&conf, LOGIN_URL.c_str());
+        if (R_FAILED(rc))
+            CHIAKI_LOGE(this->log ,"Error starting Browser\nLookup error code for more info", "", rc);
+        webConfigSetJsExtension(&conf, true);
+        webConfigSetPageCache(&conf, true);
+        webConfigSetBootLoadingIcon(&conf, true);
+        webConfigSetWhitelist(&conf, ".*");
+        rc = webConfigShow(&conf, &out);
+        if (R_FAILED(rc))
+            CHIAKI_LOGE(this->log ,"Error starting Browser\nLookup error code for more info", "", rc);
+    });
 
+	ls->addView(loginPsn);
 	int value;
 	ChiakiVideoResolutionPreset resolution_preset = this->settings->GetVideoResolution(host);
 	switch(resolution_preset)
