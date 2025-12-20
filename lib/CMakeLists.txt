@@ -95,6 +95,19 @@ if(CHIAKI_ENABLE_FFMPEG_DECODER)
 endif()
 set(CHIAKI_LIB_ENABLE_PI_DECODER "${CHIAKI_ENABLE_FFMPEG_DECODER}")
 
+if(CHIAKI_LIB_ENABLE_LIBNX_CRYPTO)
+	list(APPEND SOURCE_FILES
+		src/crypto/libnx/microecc/uECC.c
+		src/crypto/libnx/microecc/uECC.h
+		src/crypto/libnx/microecc/uECC_vli.h
+		src/crypto/libnx/microecc/uECC_config.h
+		src/crypto/libnx/microecc/types.h
+		src/crypto/libnx/aes_cfb.c
+		src/crypto/libnx/aes_cfb.h
+		src/crypto/libnx/gmac.c
+		src/crypto/libnx/gmac.h)
+endif()
+
 if(CHIAKI_ENABLE_PI_DECODER)
 	list(APPEND HEADER_FILES include/chiaki/pidecoder.h)
 	list(APPEND SOURCE_FILES src/pidecoder.c)
@@ -151,16 +164,9 @@ target_link_libraries(chiaki-lib PkgConfig::MINIUPNPC)
 
 target_link_libraries(chiaki-lib CURL::libcurl)
 
-if(CHIAKI_LIB_ENABLE_MBEDTLS)
-	if(CHIAKI_LIB_MBEDTLS_EXTERNAL_PROJECT)
-		target_link_libraries(chiaki-lib mbedtls mbedx509 mbedcrypto)
-	else()
-		# provided by mbedtls-static (mbedtls-devel)
-		find_library(MBEDTLS mbedtls)
-		find_library(MBEDX509 mbedx509)
-		find_library(MBEDCRYPTO mbedcrypto)
-		target_link_libraries(chiaki-lib ${MBEDTLS} ${MBEDX509} ${MBEDCRYPTO})
-	endif()
+if(CHIAKI_LIB_ENABLE_LIBNX_CRYPTO)
+	# libnx crypto backend - uses libnx headers directly (part of Switch SDK)
+	# No additional library linking needed for crypto
 elseif(CHIAKI_LIB_OPENSSL_EXTERNAL_PROJECT)
 	target_link_libraries(chiaki-lib OpenSSL_Crypto)
 else()
