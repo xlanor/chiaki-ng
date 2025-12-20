@@ -6,11 +6,11 @@
 #include <string.h>
 #include <assert.h>
 
-#ifdef CHIAKI_LIB_ENABLE_MBEDTLS
-#include "mbedtls/aes.h"
-#include "mbedtls/md.h"
-#include "mbedtls/gcm.h"
-#include "mbedtls/sha256.h"
+#ifdef CHIAKI_LIB_ENABLE_LIBNX_CRYPTO
+#include <switch/crypto/aes.h>
+#include <switch/crypto/hmac.h>
+#include <switch/crypto/sha256.h>
+#include "crypto/libnx/gmac.h"
 #else
 #include <openssl/evp.h>
 #include <openssl/hmac.h>
@@ -120,35 +120,8 @@ static ChiakiErrorCode gkcrypt_gen_key_iv(ChiakiGKCrypt *gkcrypt, uint8_t index,
 
 	uint8_t hmac[CHIAKI_GKCRYPT_BLOCK_SIZE*2];
 	size_t hmac_size = sizeof(hmac);
-#ifdef CHIAKI_LIB_ENABLE_MBEDTLS
-	mbedtls_md_context_t ctx;
-	mbedtls_md_init(&ctx);
-
-	if(mbedtls_md_setup(&ctx, mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), 1) != 0)
-	{
-		mbedtls_md_free(&ctx);
-		return CHIAKI_ERR_UNKNOWN;
-	}
-
-	if(mbedtls_md_hmac_starts(&ctx, ecdh_secret, CHIAKI_ECDH_SECRET_SIZE) != 0)
-	{
-		mbedtls_md_free(&ctx);
-		return CHIAKI_ERR_UNKNOWN;
-	}
-
-	if(mbedtls_md_hmac_update(&ctx, data, sizeof(data)) != 0)
-	{
-		mbedtls_md_free(&ctx);
-		return CHIAKI_ERR_UNKNOWN;
-	}
-
-	if(mbedtls_md_hmac_finish(&ctx, hmac) != 0)
-	{
-		mbedtls_md_free(&ctx);
-		return CHIAKI_ERR_UNKNOWN;
-	}
-
-	mbedtls_md_free(&ctx);
+#ifdef CHIAKI_LIB_ENABLE_LIBNX_CRYPTO
+	hmacSha256CalculateMac(hmac, ecdh_secret, CHIAKI_ECDH_SECRET_SIZE, data, sizeof(data));
 
 #else
 	if(!HMAC(EVP_sha256(), ecdh_secret, CHIAKI_ECDH_SECRET_SIZE, data, sizeof(data), hmac, (unsigned int *)&hmac_size))
@@ -184,14 +157,8 @@ CHIAKI_EXPORT void chiaki_gkcrypt_gen_gmac_key(uint64_t index, const uint8_t *ke
 	memcpy(data, key_base, 0x10);
 	counter_add(data + 0x10, iv, index * CHIAKI_GKCRYPT_GMAC_KEY_REFRESH_IV_OFFSET);
 	uint8_t md[0x20];
-#ifdef CHIAKI_LIB_ENABLE_MBEDTLS
-	// last param
-	// is224 Determines which function to use.
-	// This must be either 0 for SHA-256, or 1 for SHA-224.
-	
-	//https://github.com/Mbed-TLS/mbedtls/blob/0cc68601e6f602ae909fd701217a885396cdcee9/docs/3.0-migration-guide.md?plain=1#L346
-	// mbedtls_sha256_ret -> mbedtls_sha256
-	mbedtls_sha256(data, sizeof(data), md, 0);
+#ifdef CHIAKI_LIB_ENABLE_LIBNX_CRYPTO
+	sha256CalculateHash(md, data, sizeof(data));
 #else
 	SHA256(data, 0x20, md);
 #endif
@@ -219,16 +186,9 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_gkcrypt_gen_key_stream(ChiakiGKCrypt *gkcry
 	assert(key_pos % CHIAKI_GKCRYPT_BLOCK_SIZE == 0);
 	assert(buf_size % CHIAKI_GKCRYPT_BLOCK_SIZE == 0);
 
-#ifdef CHIAKI_LIB_ENABLE_MBEDTLS
-	// build mbedtls aes context
-	mbedtls_aes_context ctx;
-	mbedtls_aes_init(&ctx);
-
-	if(mbedtls_aes_setkey_enc(&ctx, gkcrypt->key_base, 128) != 0)
-	{
-		mbedtls_aes_free(&ctx);
-		return CHIAKI_ERR_UNKNOWN;
-	}
+#ifdef CHIAKI_LIB_ENABLE_LIBNX_CRYPTO
+	Aes128Context ctx;
+	aes128ContextCreate(&ctx, gkcrypt->key_base, true);
 
 #else
 	EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
@@ -252,18 +212,11 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_gkcrypt_gen_key_stream(ChiakiGKCrypt *gkcry
 	for(uint8_t *cur = buf, *end = buf + buf_size; cur < end; cur += CHIAKI_GKCRYPT_BLOCK_SIZE)
 		counter_add(cur, gkcrypt->iv, counter_offset++);
 
-#ifdef CHIAKI_LIB_ENABLE_MBEDTLS
-	for(int i = 0; i < buf_size; i = i + 16)
+#ifdef CHIAKI_LIB_ENABLE_LIBNX_CRYPTO
+	for(size_t i = 0; i < buf_size; i += CHIAKI_GKCRYPT_BLOCK_SIZE)
 	{
-		// loop over all blocks of 16 bytes (128 bits)
-		if(mbedtls_aes_crypt_ecb(&ctx, MBEDTLS_AES_ENCRYPT, buf + i, buf + i) != 0)
-		{
-			mbedtls_aes_free(&ctx);
-			return CHIAKI_ERR_UNKNOWN;
-		}
+		aes128EncryptBlock(&ctx, buf + i, buf + i);
 	}
-
-	mbedtls_aes_free(&ctx);
 #else
 	int outl;
 	EVP_EncryptUpdate(ctx, buf, &outl, buf, (int)buf_size);
@@ -374,39 +327,9 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_gkcrypt_gmac(ChiakiGKCrypt *gkcrypt, uint64
 		gmac_key = gmac_key_tmp;
 	}
 
-#ifdef CHIAKI_LIB_ENABLE_MBEDTLS
-	// build mbedtls gcm context AES_128_GCM
-	// Encryption
-	mbedtls_gcm_context actx;
-	mbedtls_gcm_init(&actx);
-	// set gmac_key 128 bits key
-	if(mbedtls_gcm_setkey(&actx, MBEDTLS_CIPHER_ID_AES, gmac_key, CHIAKI_GKCRYPT_BLOCK_SIZE * 8) != 0)
-	{
-		mbedtls_gcm_free(&actx);
+#ifdef CHIAKI_LIB_ENABLE_LIBNX_CRYPTO
+	if(chiaki_gmac_compute(gmac_key, iv, CHIAKI_GKCRYPT_BLOCK_SIZE, buf, buf_size, gmac_out, CHIAKI_GKCRYPT_GMAC_SIZE) != 0)
 		return CHIAKI_ERR_UNKNOWN;
-	}
-
-	// encrypt without additional data
-	if(mbedtls_gcm_starts(&actx, MBEDTLS_GCM_ENCRYPT, iv, CHIAKI_GKCRYPT_BLOCK_SIZE) != 0)
-	{
-		mbedtls_gcm_free(&actx);
-		return CHIAKI_ERR_UNKNOWN;
-	}
-	// set "additional data" only whitout input nor output
-	// to get the same result as:
-	// EVP_EncryptUpdate(ctx, NULL, &len, buf, (int)buf_size)
-	if(mbedtls_gcm_crypt_and_tag(&actx, MBEDTLS_GCM_ENCRYPT,
-		   0, iv, CHIAKI_GKCRYPT_BLOCK_SIZE,
-		   buf, buf_size, NULL, NULL,
-		   CHIAKI_GKCRYPT_GMAC_SIZE, gmac_out) != 0)
-	{
-
-		mbedtls_gcm_free(&actx);
-		return CHIAKI_ERR_UNKNOWN;
-	}
-
-	mbedtls_gcm_free(&actx);
-
 	return CHIAKI_ERR_SUCCESS;
 #else
 	ChiakiErrorCode ret = CHIAKI_ERR_SUCCESS;
