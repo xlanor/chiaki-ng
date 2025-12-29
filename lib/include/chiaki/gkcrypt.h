@@ -10,6 +10,10 @@
 #include <stdlib.h>
 #include <stdint.h>
 
+#ifdef CHIAKI_LIB_ENABLE_LIBNX_CRYPTO
+#include "../src/crypto/libnx/gmac.h"
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -45,6 +49,9 @@ typedef struct chiaki_gkcrypt_t {
 	uint8_t key_gmac_current[CHIAKI_GKCRYPT_BLOCK_SIZE];
 	uint64_t key_gmac_index_current;
 	ChiakiLog *log;
+#ifdef CHIAKI_LIB_ENABLE_LIBNX_CRYPTO
+	ChiakiGmacContext gmac_ctx;  /* Cached GMAC context for table reuse */
+#endif
 } ChiakiGKCrypt;
 
 struct chiaki_session_t;
