@@ -67,8 +67,6 @@ if(CHIAKI_ENABLE_LIBNX_TEST)
 		${CMAKE_SOURCE_DIR}/lib/src/time.c
 		${CMAKE_SOURCE_DIR}/lib/src/fec.c
 		${CMAKE_SOURCE_DIR}/lib/src/regist.c
-		${CMAKE_SOURCE_DIR}/lib/src/opusdecoder.c
-		${CMAKE_SOURCE_DIR}/lib/src/opusencoder.c
 		${CMAKE_SOURCE_DIR}/lib/src/orientation.c
 		${CMAKE_SOURCE_DIR}/lib/src/bitstream.c
 		${CMAKE_SOURCE_DIR}/lib/src/remote/holepunch.c
@@ -81,6 +79,22 @@ if(CHIAKI_ENABLE_LIBNX_TEST)
 		# libnx stubs (OpenSSL implementations)
 		${CMAKE_CURRENT_SOURCE_DIR}/libnx_stubs/libnx_crypto_stubs.c
 	)
+
+	# Experimental: PMULL hardware acceleration (opt-in, requires ARM64)
+	option(CHIAKI_LIB_ENABLE_LIBNX_EXPERIMENTAL "Enable experimental PMULL GHASH (requires ARMv8+crypto)" OFF)
+	if(CHIAKI_LIB_ENABLE_LIBNX_EXPERIMENTAL)
+		list(APPEND CHIAKI_LIB_LIBNX_SOURCES
+			${CMAKE_SOURCE_DIR}/lib/src/crypto/libnx/ghash_pmull.c
+		)
+	endif()
+
+	# Opus sources (optional)
+	if(CHIAKI_LIB_ENABLE_OPUS)
+		list(APPEND CHIAKI_LIB_LIBNX_SOURCES
+			${CMAKE_SOURCE_DIR}/lib/src/opusdecoder.c
+			${CMAKE_SOURCE_DIR}/lib/src/opusencoder.c
+		)
+	endif()
 
 	# Protobuf sources (need explicit paths since PARENT_SCOPE only goes to lib/)
 	set(CHIAKI_LIB_LIBNX_PROTO_SOURCES "${CMAKE_BINARY_DIR}/lib/protobuf/takion.pb.c")
@@ -103,6 +117,15 @@ if(CHIAKI_ENABLE_LIBNX_TEST)
 
 	# Define CHIAKI_LIB_ENABLE_LIBNX_CRYPTO for libnx crypto code paths
 	target_compile_definitions(chiaki-lib-libnx PUBLIC CHIAKI_LIB_ENABLE_LIBNX_CRYPTO)
+
+	if(CHIAKI_LIB_ENABLE_LIBNX_EXPERIMENTAL)
+		target_compile_definitions(chiaki-lib-libnx PUBLIC CHIAKI_LIB_ENABLE_LIBNX_EXPERIMENTAL)
+		# Enable ARM crypto extensions for PMULL instruction
+		set_source_files_properties(
+			${CMAKE_SOURCE_DIR}/lib/src/crypto/libnx/ghash_pmull.c
+			PROPERTIES COMPILE_FLAGS "-march=armv8-a+crypto"
+		)
+	endif()
 
 	# Link dependencies
 	find_package(Threads REQUIRED)

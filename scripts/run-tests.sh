@@ -1,14 +1,16 @@
 #!/bin/bash
 # Build and run chiaki tests in Docker
-# Usage: ./scripts/run-tests.sh [--libnx] [--no-build]
+# Usage: ./scripts/run-tests.sh [--libnx] [--pmull] [--no-build]
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 DOCKER_IMAGE="chiaki-test-builder"
+DOCKER_IMAGE_ARM64="chiaki-test-builder-arm64"
 
 RUN_LIBNX_TEST=false
+RUN_PMULL_TEST=false
 SKIP_BUILD=false
 
 for arg in "$@"; do
@@ -17,15 +19,21 @@ for arg in "$@"; do
             RUN_LIBNX_TEST=true
             shift
             ;;
+        --pmull)
+            RUN_PMULL_TEST=true
+            RUN_LIBNX_TEST=true  # PMULL implies libnx
+            shift
+            ;;
         --no-build)
             SKIP_BUILD=true
             shift
             ;;
         --help|-h)
-            echo "Usage: $0 [--libnx] [--no-build]"
+            echo "Usage: $0 [--libnx] [--pmull] [--no-build]"
             echo ""
             echo "Options:"
             echo "  --libnx     Also build and run the libnx crypto backend tests"
+            echo "  --pmull     Test ARM NEON PMULL GHASH (runs in ARM64 Docker via QEMU)"
             echo "  --no-build  Skip cmake configuration (reuse existing build)"
             echo ""
             exit 0
@@ -77,8 +85,8 @@ docker run --rm -v "$PROJECT_DIR:/src" -w /src "$DOCKER_IMAGE" bash -c "
     echo '========================================='
     ./test/chiaki-unit
 
-    # Build and run libnx tests if requested
-    if [ '$RUN_LIBNX_TEST' = 'true' ]; then
+    # Build and run libnx tests if requested (table-driven, x86_64)
+    if [ '$RUN_LIBNX_TEST' = 'true' ] && [ '$RUN_PMULL_TEST' != 'true' ]; then
         echo ''
         echo '========================================='
         echo 'Building chiaki-unit-libnx (libnx crypto backend)...'
@@ -97,3 +105,28 @@ docker run --rm -v "$PROJECT_DIR:/src" -w /src "$DOCKER_IMAGE" bash -c "
     echo 'All tests passed!'
     echo '========================================='
 "
+
+# Run PMULL tests in ARM64 Docker container via QEMU
+if [ "$RUN_PMULL_TEST" = true ]; then
+    echo ""
+    echo "========================================="
+    echo "Setting up ARM64 emulation via QEMU..."
+    echo "========================================="
+
+    # Register QEMU binfmt handlers using tonistiigi/binfmt (works better with Docker)
+    docker run --rm --privileged tonistiigi/binfmt --install arm64
+
+    # Create buildx builder if it doesn't exist
+    if ! docker buildx inspect arm64-builder &>/dev/null 2>&1; then
+        echo "Creating buildx builder for ARM64..."
+        docker buildx create --name arm64-builder --use
+    else
+        docker buildx use arm64-builder
+    fi
+
+    # Build and run tests inside Docker build (workaround for binfmt issues with docker run)
+    echo "Building and running PMULL tests in ARM64 buildx..."
+    echo "(Tests run during build - if build succeeds, tests passed)"
+    echo ""
+    docker buildx build --platform linux/arm64 --progress=plain -f "$SCRIPT_DIR/Dockerfile.arm64-pmull-test" "$PROJECT_DIR"
+fi

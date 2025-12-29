@@ -1,0 +1,46 @@
+# ARM64 test container for PMULL GHASH testing
+# Builds and runs chiaki-unit-libnx with PMULL hardware acceleration enabled
+# Run via: docker buildx build --platform linux/arm64 -f scripts/Dockerfile.arm64-pmull-test .
+
+FROM --platform=linux/arm64 ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    cmake \
+    ninja-build \
+    pkg-config \
+    git \
+    libssl-dev \
+    libcurl4-openssl-dev \
+    libminiupnpc-dev \
+    libjson-c-dev \
+    protobuf-compiler \
+    python3-protobuf \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy source
+COPY . /src
+WORKDIR /src
+
+# Clean any cached build artifacts and build with PMULL enabled
+RUN rm -rf build && mkdir -p build && cd build && \
+    cmake .. \
+        -DCHIAKI_ENABLE_TESTS=ON \
+        -DCHIAKI_ENABLE_GUI=OFF \
+        -DCHIAKI_ENABLE_CLI=OFF \
+        -DCHIAKI_ENABLE_STEAM_SHORTCUT=OFF \
+        -DCHIAKI_ENABLE_STEAMDECK_NATIVE=OFF \
+        -DCHIAKI_LIB_ENABLE_OPUS=OFF \
+        -DCHIAKI_ENABLE_LIBNX_TEST=ON \
+        -DCHIAKI_LIB_ENABLE_LIBNX_EXPERIMENTAL=ON \
+        -G Ninja && \
+    ninja chiaki-unit-libnx
+
+# Run tests - if this fails, the build fails
+RUN cd build && ./test/chiaki-unit-libnx
+
+# If we get here, tests passed
+RUN echo "All PMULL tests passed!"

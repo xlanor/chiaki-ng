@@ -14,6 +14,10 @@
 #include <stddef.h>
 #include <stdbool.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #ifdef CHIAKI_LIB_ENABLE_LIBNX_CRYPTO
 #include <switch/crypto/aes.h>
 #endif
@@ -24,6 +28,40 @@
 /* Forward declaration for internal GHashTable (defined in gmac.c) */
 struct GHashTable;
 
+#ifdef CHIAKI_LIB_ENABLE_LIBNX_EXPERIMENTAL
+#include "ghash_pmull.h"
+#endif
+
+/**
+ * GHASH mode selection for runtime dispatch
+ */
+typedef enum {
+    CHIAKI_LIBNX_GHASH_TABLE = 0,  /* 8-bit table-driven (default, works everywhere) */
+    CHIAKI_LIBNX_GHASH_PMULL = 1   /* ARM NEON PMULL hardware (experimental) */
+} ChiakiLibnxGhashMode;
+
+#if defined(__SWITCH__) || defined(CHIAKI_LIB_ENABLE_LIBNX_CRYPTO)
+/**
+ * Set global GHASH mode for all subsequent GMAC contexts
+ *
+ * Call once at startup, before creating any sessions.
+ * Default is TABLE mode if not called.
+ *
+ * Note: PMULL mode requires CHIAKI_LIB_ENABLE_LIBNX_EXPERIMENTAL at compile time.
+ * If PMULL is requested but not compiled in, TABLE mode is used with a warning.
+ *
+ * @param mode  GHASH implementation to use
+ */
+void chiaki_libnx_set_ghash_mode(ChiakiLibnxGhashMode mode);
+
+/**
+ * Get current global GHASH mode
+ *
+ * @return Current GHASH mode (TABLE or PMULL)
+ */
+ChiakiLibnxGhashMode chiaki_libnx_get_ghash_mode(void);
+#endif
+
 /**
  * GMAC context for table caching optimization
  *
@@ -33,9 +71,13 @@ struct GHashTable;
  * but the key only changes every ~45,000 key positions.
  */
 typedef struct {
+    ChiakiLibnxGhashMode mode;       /* Runtime mode selection (TABLE or PMULL) */
     uint8_t h[GMAC_BLOCK_SIZE];      /* Hash key H = AES_K(0) */
     uint8_t key[GMAC_BLOCK_SIZE];    /* Cached AES key for change detection */
-    struct GHashTable *table;        /* Cached GHASH multiplication table (heap) */
+    struct GHashTable *table;        /* Cached GHASH multiplication table (TABLE mode) */
+#ifdef CHIAKI_LIB_ENABLE_LIBNX_EXPERIMENTAL
+    GHashPmullCtx pmull_ctx;         /* PMULL-based GHASH context (PMULL mode) */
+#endif
     bool initialized;                /* Whether context has valid cached data */
     uint32_t table_init_count;       /* For testing: counts table rebuilds */
 #ifdef CHIAKI_LIB_ENABLE_LIBNX_CRYPTO
@@ -105,5 +147,9 @@ int chiaki_gmac_compute_cached(
     uint8_t *tag,
     size_t tag_len
 );
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* CHIAKI_GMAC_H */
