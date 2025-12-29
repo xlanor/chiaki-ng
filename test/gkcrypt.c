@@ -379,6 +379,81 @@ static MunitResult test_gmac_multiple_of_key_refresh(const MunitParameter params
 	return MUNIT_OK;
 }
 
+#ifdef CHIAKI_LIB_ENABLE_LIBNX_CRYPTO
+static MunitResult test_gmac_table_caching(const MunitParameter params[], void *user)
+{
+	static const uint8_t handshake_key[] = { 0x70, 0x58, 0x37, 0x50, 0x91, 0xea, 0xd1, 0x37, 0x71, 0x58, 0xec, 0xb3, 0x0b, 0xea, 0x23, 0x87 };
+	static const uint8_t ecdh_secret[] = { 0x3c, 0x3a, 0xf0, 0xec, 0xd6, 0x33, 0x1b, 0xb1, 0x6d, 0x24, 0x4f, 0x48, 0x19, 0xde, 0x06, 0x3d,
+										0xc7, 0x0e, 0xac, 0x95, 0x70, 0xac, 0x24, 0x92, 0x86, 0xa7, 0x24, 0xd0, 0x7a, 0x37, 0x55, 0x52 };
+
+	static const uint8_t data[] = { 0x03, 0x11, 0xa4, 0x11, 0xa5, 0x00, 0x02, 0x50, 0x21, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x6b };
+
+	static const uint8_t crypt_index = 3;
+
+	ChiakiLog log;
+	ChiakiGKCrypt gkcrypt;
+
+	ChiakiErrorCode err = chiaki_gkcrypt_init(&gkcrypt, &log, 0, crypt_index, handshake_key, ecdh_secret);
+	if(err != CHIAKI_ERR_SUCCESS)
+		return MUNIT_ERROR;
+
+	uint8_t gmac[CHIAKI_GKCRYPT_GMAC_SIZE];
+
+	/* Test 1: First GMAC call - table should be built (count = 1) */
+	uint64_t key_pos_1 = 0x100;
+	err = chiaki_gkcrypt_gmac(&gkcrypt, key_pos_1, data, sizeof(data), gmac);
+	if(err != CHIAKI_ERR_SUCCESS)
+	{
+		chiaki_gkcrypt_fini(&gkcrypt);
+		return MUNIT_ERROR;
+	}
+	munit_assert_uint32(gkcrypt.gmac_ctx.table_init_count, ==, 1);
+
+	/* Test 2: Second call with same key index - table should be reused (count still 1) */
+	uint64_t key_pos_2 = 0x200;
+	err = chiaki_gkcrypt_gmac(&gkcrypt, key_pos_2, data, sizeof(data), gmac);
+	if(err != CHIAKI_ERR_SUCCESS)
+	{
+		chiaki_gkcrypt_fini(&gkcrypt);
+		return MUNIT_ERROR;
+	}
+	munit_assert_uint32(gkcrypt.gmac_ctx.table_init_count, ==, 1);
+
+	/* Test 3: Third call still in same key index - table should be reused (count still 1) */
+	uint64_t key_pos_3 = 0x1000;
+	err = chiaki_gkcrypt_gmac(&gkcrypt, key_pos_3, data, sizeof(data), gmac);
+	if(err != CHIAKI_ERR_SUCCESS)
+	{
+		chiaki_gkcrypt_fini(&gkcrypt);
+		return MUNIT_ERROR;
+	}
+	munit_assert_uint32(gkcrypt.gmac_ctx.table_init_count, ==, 1);
+
+	/* Test 4: Call with key_pos crossing GMAC_KEY_REFRESH boundary - table should be rebuilt (count = 2) */
+	uint64_t key_pos_new_index = CHIAKI_GKCRYPT_GMAC_KEY_REFRESH_KEY_POS + 0x100;
+	err = chiaki_gkcrypt_gmac(&gkcrypt, key_pos_new_index, data, sizeof(data), gmac);
+	if(err != CHIAKI_ERR_SUCCESS)
+	{
+		chiaki_gkcrypt_fini(&gkcrypt);
+		return MUNIT_ERROR;
+	}
+	munit_assert_uint32(gkcrypt.gmac_ctx.table_init_count, ==, 2);
+
+	/* Test 5: More calls with new key - table should be reused (count still 2) */
+	err = chiaki_gkcrypt_gmac(&gkcrypt, key_pos_new_index + 0x10, data, sizeof(data), gmac);
+	if(err != CHIAKI_ERR_SUCCESS)
+	{
+		chiaki_gkcrypt_fini(&gkcrypt);
+		return MUNIT_ERROR;
+	}
+	munit_assert_uint32(gkcrypt.gmac_ctx.table_init_count, ==, 2);
+
+	chiaki_gkcrypt_fini(&gkcrypt);
+
+	return MUNIT_OK;
+}
+#endif
+
 
 MunitTest tests_gkcrypt[] = {
 	{
@@ -437,5 +512,15 @@ MunitTest tests_gkcrypt[] = {
 		MUNIT_TEST_OPTION_NONE,
 		NULL
 	},
+#ifdef CHIAKI_LIB_ENABLE_LIBNX_CRYPTO
+	{
+		"/gmac_table_caching",
+		test_gmac_table_caching,
+		NULL,
+		NULL,
+		MUNIT_TEST_OPTION_NONE,
+		NULL
+	},
+#endif
 	{ NULL, NULL, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL }
 };

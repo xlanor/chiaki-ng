@@ -70,6 +70,10 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_gkcrypt_init(ChiakiGKCrypt *gkcrypt, Chiaki
 	gkcrypt->key_gmac_index_current = 0;
 	memcpy(gkcrypt->key_gmac_current, gkcrypt->key_gmac_base, sizeof(gkcrypt->key_gmac_current));
 
+#ifdef CHIAKI_LIB_ENABLE_LIBNX_CRYPTO
+	chiaki_gmac_context_init(&gkcrypt->gmac_ctx);
+#endif
+
 	if(gkcrypt->key_buf)
 	{
 		err = chiaki_thread_create(&gkcrypt->key_buf_thread, gkcrypt_thread_func, gkcrypt);
@@ -106,6 +110,9 @@ CHIAKI_EXPORT void chiaki_gkcrypt_fini(ChiakiGKCrypt *gkcrypt)
 		chiaki_mutex_fini(&gkcrypt->key_buf_mutex);
 		chiaki_aligned_free(gkcrypt->key_buf);
 	}
+#ifdef CHIAKI_LIB_ENABLE_LIBNX_CRYPTO
+	chiaki_gmac_context_fini(&gkcrypt->gmac_ctx);
+#endif
 }
 
 static ChiakiErrorCode gkcrypt_gen_key_iv(ChiakiGKCrypt *gkcrypt, uint8_t index, const uint8_t *handshake_key, const uint8_t *ecdh_secret)
@@ -328,7 +335,8 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_gkcrypt_gmac(ChiakiGKCrypt *gkcrypt, uint64
 	}
 
 #ifdef CHIAKI_LIB_ENABLE_LIBNX_CRYPTO
-	if(chiaki_gmac_compute(gmac_key, iv, CHIAKI_GKCRYPT_BLOCK_SIZE, buf, buf_size, gmac_out, CHIAKI_GKCRYPT_GMAC_SIZE) != 0)
+	/* Use cached context - table will be reused if key unchanged */
+	if(chiaki_gmac_compute_cached(&gkcrypt->gmac_ctx, gmac_key, iv, CHIAKI_GKCRYPT_BLOCK_SIZE, buf, buf_size, gmac_out, CHIAKI_GKCRYPT_GMAC_SIZE) != 0)
 		return CHIAKI_ERR_UNKNOWN;
 	return CHIAKI_ERR_SUCCESS;
 #else
