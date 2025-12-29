@@ -15,9 +15,38 @@
 #include "gmac.h"
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
+
+#ifdef CHIAKI_LIB_ENABLE_LIBNX_EXPERIMENTAL
+#include "ghash_pmull.h"
+#endif
 
 #ifdef CHIAKI_LIB_ENABLE_LIBNX_CRYPTO
 #include <switch/crypto/aes.h>
+#endif
+
+static ChiakiLibnxGhashMode g_ghash_mode = CHIAKI_LIBNX_GHASH_TABLE;
+
+#if defined(__SWITCH__) || defined(CHIAKI_LIB_ENABLE_LIBNX_CRYPTO)
+void chiaki_libnx_set_ghash_mode(ChiakiLibnxGhashMode mode)
+{
+#ifdef CHIAKI_LIB_ENABLE_LIBNX_EXPERIMENTAL
+    g_ghash_mode = mode;
+#else
+    if (mode == CHIAKI_LIBNX_GHASH_PMULL) {
+        fprintf(stderr, "WARNING: PMULL mode requested but not compiled in "
+                "(CHIAKI_LIB_ENABLE_LIBNX_EXPERIMENTAL not set), using TABLE mode\n");
+        g_ghash_mode = CHIAKI_LIBNX_GHASH_TABLE;
+    } else {
+        g_ghash_mode = mode;
+    }
+#endif
+}
+
+ChiakiLibnxGhashMode chiaki_libnx_get_ghash_mode(void)
+{
+    return g_ghash_mode;
+}
 #endif
 
 /*
@@ -361,6 +390,7 @@ int chiaki_gmac_compute(
 void chiaki_gmac_context_init(ChiakiGmacContext *ctx)
 {
     memset(ctx, 0, sizeof(*ctx));
+    ctx->mode = g_ghash_mode;  /* Use global mode setting */
     ctx->table = NULL;
     ctx->initialized = false;
     ctx->table_init_count = 0;
@@ -408,11 +438,13 @@ int chiaki_gmac_compute_cached(
                           memcmp(ctx->key, key, GMAC_BLOCK_SIZE) != 0;
 
     if (need_recompute) {
-        /* Allocate table if needed */
-        if (!ctx->table) {
-            ctx->table = malloc(sizeof(GHashTable));
-            if (!ctx->table)
-                return -1;
+        if (ctx->mode == CHIAKI_LIBNX_GHASH_TABLE) {
+            /* Allocate table if needed (table-driven mode only) */
+            if (!ctx->table) {
+                ctx->table = malloc(sizeof(GHashTable));
+                if (!ctx->table)
+                    return -1;
+            }
         }
 
         /* Store key for future comparison */
@@ -425,8 +457,16 @@ int chiaki_gmac_compute_cached(
         memset(ctx->h, 0, GMAC_BLOCK_SIZE);
         aes128EncryptBlock(&ctx->aes_ctx, ctx->h, ctx->h);
 
-        /* Initialize GHASH table for this H */
-        ghash_table_init(ctx->table, ctx->h);
+#ifdef CHIAKI_LIB_ENABLE_LIBNX_EXPERIMENTAL
+        if (ctx->mode == CHIAKI_LIBNX_GHASH_PMULL) {
+            /* Initialize PMULL-based GHASH context */
+            ghash_pmull_init(&ctx->pmull_ctx, ctx->h);
+        } else
+#endif
+        {
+            /* Initialize table-driven GHASH */
+            ghash_table_init(ctx->table, ctx->h);
+        }
 
         ctx->initialized = true;
         ctx->table_init_count++;
@@ -440,7 +480,14 @@ int chiaki_gmac_compute_cached(
         J0[15] = 1;
     } else {
         /* Otherwise, J0 = GHASH_H(IV || 0^s || len(IV)) */
-        ghash_table(ctx->table, iv, iv_len, J0);
+#ifdef CHIAKI_LIB_ENABLE_LIBNX_EXPERIMENTAL
+        if (ctx->mode == CHIAKI_LIBNX_GHASH_PMULL) {
+            ghash_pmull(&ctx->pmull_ctx, iv, iv_len, J0);
+        } else
+#endif
+        {
+            ghash_table(ctx->table, iv, iv_len, J0);
+        }
 
         /* Add length block: 64 bits of 0 || 64 bits of IV length in bits */
         memset(len_block, 0, GMAC_BLOCK_SIZE);
@@ -455,14 +502,28 @@ int chiaki_gmac_compute_cached(
         len_block[15] = iv_bits & 0xff;
 
         xor_block(J0, len_block);
-        gf128_mul_table(J0, J0, ctx->table);
+#ifdef CHIAKI_LIB_ENABLE_LIBNX_EXPERIMENTAL
+        if (ctx->mode == CHIAKI_LIBNX_GHASH_PMULL) {
+            gf128_mul_pmull(J0, J0, ctx->h);
+        } else
+#endif
+        {
+            gf128_mul_table(J0, J0, ctx->table);
+        }
     }
 
     /* Initialize GHASH state Y = 0 */
     memset(Y, 0, GMAC_BLOCK_SIZE);
 
     /* Process AAD through GHASH */
-    ghash_table(ctx->table, aad, aad_len, Y);
+#ifdef CHIAKI_LIB_ENABLE_LIBNX_EXPERIMENTAL
+    if (ctx->mode == CHIAKI_LIBNX_GHASH_PMULL) {
+        ghash_pmull(&ctx->pmull_ctx, aad, aad_len, Y);
+    } else
+#endif
+    {
+        ghash_table(ctx->table, aad, aad_len, Y);
+    }
 
     /* For GMAC (no ciphertext), we skip the ciphertext GHASH step */
 
@@ -482,7 +543,14 @@ int chiaki_gmac_compute_cached(
 
     /* Final GHASH step with length block */
     xor_block(Y, len_block);
-    gf128_mul_table(Y, Y, ctx->table);
+#ifdef CHIAKI_LIB_ENABLE_LIBNX_EXPERIMENTAL
+    if (ctx->mode == CHIAKI_LIBNX_GHASH_PMULL) {
+        gf128_mul_pmull(Y, Y, ctx->h);
+    } else
+#endif
+    {
+        gf128_mul_table(Y, Y, ctx->table);
+    }
 
     /* S = Y (final GHASH output) */
     /* Tag = S XOR AES_K(J0) */

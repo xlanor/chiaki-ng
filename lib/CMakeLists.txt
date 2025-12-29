@@ -106,6 +106,13 @@ if(CHIAKI_LIB_ENABLE_LIBNX_CRYPTO)
 		src/crypto/libnx/aes_cfb.h
 		src/crypto/libnx/gmac.c
 		src/crypto/libnx/gmac.h)
+
+	option(CHIAKI_LIB_ENABLE_LIBNX_EXPERIMENTAL "Enable experimental PMULL GHASH (requires ARMv8+crypto)" OFF)
+	if(CHIAKI_LIB_ENABLE_LIBNX_EXPERIMENTAL)
+		list(APPEND SOURCE_FILES
+			src/crypto/libnx/ghash_pmull.c
+			src/crypto/libnx/ghash_pmull.h)
+	endif()
 endif()
 
 if(CHIAKI_ENABLE_PI_DECODER)
@@ -167,6 +174,15 @@ target_link_libraries(chiaki-lib CURL::libcurl)
 if(CHIAKI_LIB_ENABLE_LIBNX_CRYPTO)
 	# libnx crypto backend - uses libnx headers directly (part of Switch SDK)
 	# No additional library linking needed for crypto
+	# GHASH mode (TABLE vs PMULL) is selected at runtime via chiaki_libnx_set_ghash_mode()
+	if(CHIAKI_LIB_ENABLE_LIBNX_EXPERIMENTAL)
+		target_compile_definitions(chiaki-lib PRIVATE CHIAKI_LIB_ENABLE_LIBNX_EXPERIMENTAL)
+		# Enable ARM crypto extensions for PMULL instruction
+		set_source_files_properties(
+			src/crypto/libnx/ghash_pmull.c
+			PROPERTIES COMPILE_FLAGS "-march=armv8-a+crypto"
+		)
+	endif()
 elseif(CHIAKI_LIB_OPENSSL_EXTERNAL_PROJECT)
 	target_link_libraries(chiaki-lib OpenSSL_Crypto)
 else()
