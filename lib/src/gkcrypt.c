@@ -72,6 +72,7 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_gkcrypt_init(ChiakiGKCrypt *gkcrypt, Chiaki
 
 #ifdef CHIAKI_LIB_ENABLE_LIBNX_CRYPTO
 	chiaki_gmac_context_init(&gkcrypt->gmac_ctx);
+	aes128ContextCreate(&gkcrypt->aes_ctx, gkcrypt->key_base, true);
 #endif
 
 	if(gkcrypt->key_buf)
@@ -194,8 +195,6 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_gkcrypt_gen_key_stream(ChiakiGKCrypt *gkcry
 	assert(buf_size % CHIAKI_GKCRYPT_BLOCK_SIZE == 0);
 
 #ifdef CHIAKI_LIB_ENABLE_LIBNX_CRYPTO
-	Aes128Context ctx;
-	aes128ContextCreate(&ctx, gkcrypt->key_base, true);
 
 #else
 	EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
@@ -222,7 +221,7 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_gkcrypt_gen_key_stream(ChiakiGKCrypt *gkcry
 #ifdef CHIAKI_LIB_ENABLE_LIBNX_CRYPTO
 	for(size_t i = 0; i < buf_size; i += CHIAKI_GKCRYPT_BLOCK_SIZE)
 	{
-		aes128EncryptBlock(&ctx, buf + i, buf + i);
+		aes128EncryptBlock(&gkcrypt->aes_ctx, buf + i, buf + i);
 	}
 #else
 	int outl;

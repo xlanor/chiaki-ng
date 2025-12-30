@@ -50,7 +50,8 @@ typedef struct chiaki_gkcrypt_t {
 	uint64_t key_gmac_index_current;
 	ChiakiLog *log;
 #ifdef CHIAKI_LIB_ENABLE_LIBNX_CRYPTO
-	ChiakiGmacContext gmac_ctx;  /* Cached GMAC context for table reuse */
+	ChiakiGmacContext gmac_ctx;
+	Aes128Context aes_ctx;
 #endif
 } ChiakiGKCrypt;
 
