@@ -4,9 +4,10 @@
 #include <chiaki/ecdh.h>
 #include <chiaki/base64.h>
 
-#ifdef CHIAKI_LIB_ENABLE_MBEDTLS
-#include "mbedtls/entropy.h"
-#include "mbedtls/md.h"
+#ifdef CHIAKI_LIB_ENABLE_LIBNX_CRYPTO
+#include "crypto/libnx/microecc/uECC.h"
+#include <switch/crypto/hmac.h>
+#include <switch/services/csrng.h>
 #else
 #include <openssl/evp.h>
 #include <openssl/ec.h>
@@ -20,39 +21,31 @@
 
 #include <stdio.h>
 
+#ifdef CHIAKI_LIB_ENABLE_LIBNX_CRYPTO
+/* RNG callback for micro-ecc using libnx csrng */
+static int libnx_rng(uint8_t *dest, unsigned size)
+{
+	csrngGetRandomBytes(dest, size);
+	return 1;
+}
+#endif
+
 CHIAKI_EXPORT ChiakiErrorCode chiaki_ecdh_init(ChiakiECDH *ecdh)
 {
 	memset(ecdh, 0, sizeof(ChiakiECDH));
-#ifdef CHIAKI_LIB_ENABLE_MBEDTLS
-#define CHECK(err) if((err) != 0) { \
-	chiaki_ecdh_fini(ecdh); \
-	return CHIAKI_ERR_UNKNOWN; }
-	// mbedtls ecdh example:
-	// https://github.com/ARMmbed/mbedtls/blob/development/programs/pkey/ecdh_curve25519.c
-	const char pers[] = "ecdh";
-	mbedtls_entropy_context entropy;
-	//init RNG Seed context
-	mbedtls_entropy_init(&entropy);
-	// init local key
-	//mbedtls_ecp_keypair_init(&ecdh->key_local);
-	mbedtls_ecdh_init(&ecdh->ctx);
-	// init ecdh group
-	// keep rng context in ecdh for later reuse
-	mbedtls_ctr_drbg_init(&ecdh->drbg);
+#ifdef CHIAKI_LIB_ENABLE_LIBNX_CRYPTO
+	/* Initialize csrng service */
+	csrngInitialize();
 
-	// build RNG seed
-	CHECK(mbedtls_ctr_drbg_seed(&ecdh->drbg, mbedtls_entropy_func, &entropy,
-		(const unsigned char *) pers, sizeof pers));
+	/* Set RNG for micro-ecc */
+	uECC_set_rng(libnx_rng);
 
-	// build MBEDTLS_ECP_DP_SECP256K1 group
-	CHECK(mbedtls_ecp_group_load(&ecdh->ctx.grp, MBEDTLS_ECP_DP_SECP256K1));
-	// build key
-	CHECK(mbedtls_ecdh_gen_public(&ecdh->ctx.grp, &ecdh->ctx.d,
-		&ecdh->ctx.Q, mbedtls_ctr_drbg_random, &ecdh->drbg));
-
-	// relese entropy ptr
-	mbedtls_entropy_free(&entropy);
-#undef CHECK
+	/* Generate keypair on secp256k1 */
+	if (!uECC_make_key(ecdh->public_key, ecdh->private_key, uECC_secp256k1()))
+	{
+		csrngExit();
+		return CHIAKI_ERR_UNKNOWN;
+	}
 
 #else
 #define CHECK(a) if(!(a)) { chiaki_ecdh_fini(ecdh); return CHIAKI_ERR_UNKNOWN; }
@@ -70,9 +63,11 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_ecdh_init(ChiakiECDH *ecdh)
 
 CHIAKI_EXPORT void chiaki_ecdh_fini(ChiakiECDH *ecdh)
 {
-#ifdef CHIAKI_LIB_ENABLE_MBEDTLS
-	mbedtls_ecdh_free(&ecdh->ctx);
-	mbedtls_ctr_drbg_free(&ecdh->drbg);
+#ifdef CHIAKI_LIB_ENABLE_LIBNX_CRYPTO
+	/* Clear sensitive key material */
+	memset(ecdh->private_key, 0, sizeof(ecdh->private_key));
+	memset(ecdh->public_key, 0, sizeof(ecdh->public_key));
+	csrngExit();
 #else
 	EC_KEY_free(ecdh->key_local);
 	EC_GROUP_free(ecdh->group);
@@ -81,26 +76,26 @@ CHIAKI_EXPORT void chiaki_ecdh_fini(ChiakiECDH *ecdh)
 
 CHIAKI_EXPORT ChiakiErrorCode chiaki_ecdh_set_local_key(ChiakiECDH *ecdh, const uint8_t *private_key, size_t private_key_size, const uint8_t *public_key, size_t public_key_size)
 {
-#ifdef CHIAKI_LIB_ENABLE_MBEDTLS
-	//https://tls.mbed.org/discussions/generic/publickey-binary-data-in-der
-	// Load keys from buffers (i.e: config file)
-	// TODO test
-
-	// public
-	int r = 0;
-	r = mbedtls_ecp_point_read_binary(&ecdh->ctx.grp, &ecdh->ctx.Q, public_key, public_key_size);
-	if(r != 0)
+#ifdef CHIAKI_LIB_ENABLE_LIBNX_CRYPTO
+	/* Copy private key (32 bytes) */
+	if (private_key_size != CHIAKI_UECC_PRIVATE_KEY_SIZE)
 		return CHIAKI_ERR_UNKNOWN;
+	memcpy(ecdh->private_key, private_key, CHIAKI_UECC_PRIVATE_KEY_SIZE);
 
-	// secret
-	r = mbedtls_mpi_read_binary(&ecdh->ctx.d, private_key, private_key_size);
-	if(r != 0)
+	/* Handle public key - may have 0x04 prefix (65 bytes) or be raw (64 bytes) */
+	if (public_key_size == 65 && public_key[0] == 0x04)
+	{
+		/* Skip 0x04 uncompressed point prefix */
+		memcpy(ecdh->public_key, public_key + 1, CHIAKI_UECC_PUBLIC_KEY_SIZE);
+	}
+	else if (public_key_size == CHIAKI_UECC_PUBLIC_KEY_SIZE)
+	{
+		memcpy(ecdh->public_key, public_key, CHIAKI_UECC_PUBLIC_KEY_SIZE);
+	}
+	else
+	{
 		return CHIAKI_ERR_UNKNOWN;
-
-	// regen key
-	r = mbedtls_ecdh_gen_public(&ecdh->ctx.grp, &ecdh->ctx.d, &ecdh->ctx.Q, mbedtls_ctr_drbg_random, &ecdh->drbg);
-	if(r != 0)
-		return CHIAKI_ERR_UNKNOWN;
+	}
 
 	return CHIAKI_ERR_SUCCESS;
 #else
@@ -145,34 +140,17 @@ error_priv:
 
 CHIAKI_EXPORT ChiakiErrorCode chiaki_ecdh_get_local_pub_key(ChiakiECDH *ecdh, uint8_t *key_out, size_t *key_out_size, const uint8_t *handshake_key, uint8_t *sig_out, size_t *sig_out_size)
 {
-#ifdef CHIAKI_LIB_ENABLE_MBEDTLS
-	mbedtls_md_context_t ctx;
-	mbedtls_md_init(&ctx);
+#ifdef CHIAKI_LIB_ENABLE_LIBNX_CRYPTO
+	/* Export public key in uncompressed format: 0x04 || X || Y */
+	key_out[0] = 0x04;
+	memcpy(key_out + 1, ecdh->public_key, CHIAKI_UECC_PUBLIC_KEY_SIZE);
+	*key_out_size = 1 + CHIAKI_UECC_PUBLIC_KEY_SIZE;  /* 65 bytes */
 
-#define GOTO_ERROR(err) do { \
-	if((err) !=0){ \
-		goto error; \
-	}} while(0)
-	// extract pub key to build dh shared secret
-	// this key is sent to the remote server
-	GOTO_ERROR(mbedtls_ecp_point_write_binary( &ecdh->ctx.grp, &ecdh->ctx.Q,
-		MBEDTLS_ECP_PF_UNCOMPRESSED, key_out_size, key_out, *key_out_size ));
-
-	// https://tls.mbed.org/module-level-design-hashing
-	// HMAC
-	GOTO_ERROR(mbedtls_md_setup(&ctx, mbedtls_md_info_from_type(MBEDTLS_MD_SHA256) , 1));
-	GOTO_ERROR(mbedtls_md_hmac_starts(&ctx, handshake_key, CHIAKI_HANDSHAKE_KEY_SIZE));
-	GOTO_ERROR(mbedtls_md_hmac_update(&ctx, key_out, *key_out_size));
-	GOTO_ERROR(mbedtls_md_hmac_finish(&ctx, sig_out));
-	// SHA256 = 8*32
+	/* Compute HMAC-SHA256 signature of the public key */
+	hmacSha256CalculateMac(sig_out, handshake_key, CHIAKI_HANDSHAKE_KEY_SIZE, key_out, *key_out_size);
 	*sig_out_size = 32;
-#undef GOTO_ERROR
-	mbedtls_md_free(&ctx);
-	return CHIAKI_ERR_SUCCESS;
 
-error:
-	mbedtls_md_free(&ctx);
-	return CHIAKI_ERR_UNKNOWN;
+	return CHIAKI_ERR_SUCCESS;
 #else
 	const EC_POINT *point = EC_KEY_get0_public_key(ecdh->key_local);
 	if(!point)
@@ -192,30 +170,36 @@ error:
 CHIAKI_EXPORT ChiakiErrorCode chiaki_ecdh_derive_secret(ChiakiECDH *ecdh, uint8_t *secret_out, const uint8_t *remote_key, size_t remote_key_size, const uint8_t *handshake_key, const uint8_t *remote_sig, size_t remote_sig_size)
 {
 	//compute DH shared key
-#ifdef CHIAKI_LIB_ENABLE_MBEDTLS
-	// https://github.com/ARMmbed/mbedtls/blob/development/programs/pkey/ecdh_curve25519.c#L151
-#define GOTO_ERROR(err) do { \
-	if((err) !=0){ \
-		goto error;} \
-	} while(0)
+#ifdef CHIAKI_LIB_ENABLE_LIBNX_CRYPTO
+	const uint8_t *remote_pub;
+	uint8_t remote_pub_buf[CHIAKI_UECC_PUBLIC_KEY_SIZE];
 
-	GOTO_ERROR(mbedtls_mpi_lset(&ecdh->ctx.Qp.Z, 1));
-	// load Qp point form remote PK
-	GOTO_ERROR(mbedtls_ecp_point_read_binary(&ecdh->ctx.grp,
-		&ecdh->ctx.Qp, remote_key, remote_key_size));
+	/* Handle remote public key format */
+	if (remote_key_size == 65 && remote_key[0] == 0x04)
+	{
+		/* Skip 0x04 uncompressed point prefix */
+		remote_pub = remote_key + 1;
+	}
+	else if (remote_key_size == CHIAKI_UECC_PUBLIC_KEY_SIZE)
+	{
+		remote_pub = remote_key;
+	}
+	else
+	{
+		return CHIAKI_ERR_UNKNOWN;
+	}
 
-	// build shared secret (diffie-hellman)
-	GOTO_ERROR(mbedtls_ecdh_compute_shared(&ecdh->ctx.grp,
-		&ecdh->ctx.z, &ecdh->ctx.Qp, &ecdh->ctx.d,
-		mbedtls_ctr_drbg_random, &ecdh->drbg));
+	/* Compute ECDH shared secret */
+	if (!uECC_shared_secret(remote_pub, ecdh->private_key, secret_out, uECC_secp256k1()))
+	{
+		return CHIAKI_ERR_UNKNOWN;
+	}
 
-	// export shared secret to data buffer
-	GOTO_ERROR(mbedtls_mpi_write_binary(&ecdh->ctx.z,
-		secret_out, CHIAKI_ECDH_SECRET_SIZE));
+	(void)handshake_key;
+	(void)remote_sig;
+	(void)remote_sig_size;
 
 	return CHIAKI_ERR_SUCCESS;
-error:
-	return CHIAKI_ERR_UNKNOWN;
 
 #else
 	EC_POINT *remote_public_key = EC_POINT_new(ecdh->group);
