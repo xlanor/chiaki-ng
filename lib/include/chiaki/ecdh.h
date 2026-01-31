@@ -12,25 +12,25 @@
 extern "C" {
 #endif
 
-#ifdef CHIAKI_LIB_ENABLE_MBEDTLS
-#include "mbedtls/ecdh.h"
-#include "mbedtls/ctr_drbg.h"
-#endif
-
-
 #define CHIAKI_ECDH_SECRET_SIZE 32
+
+/* micro-ecc key sizes for secp256k1 */
+#define CHIAKI_UECC_PRIVATE_KEY_SIZE 32
+#define CHIAKI_UECC_PUBLIC_KEY_SIZE 64  /* micro-ecc format: raw X,Y without 0x04 prefix */
 
 typedef struct chiaki_ecdh_t
 {
-// the following lines may lead to memory corruption
-// CHIAKI_LIB_ENABLE_MBEDTLS must be defined
-// globally (whole project)
-#ifdef CHIAKI_LIB_ENABLE_MBEDTLS
-	// mbedtls ecdh context
-	mbedtls_ecdh_context ctx;
-	// deterministic random bit generator
-	mbedtls_ctr_drbg_context drbg;
+/*
+ * WARNING: The following struct layout varies by crypto backend.
+ * CHIAKI_LIB_ENABLE_LIBNX_CRYPTO must be defined globally (whole project)
+ * to ensure consistent struct sizes.
+ */
+#ifdef CHIAKI_LIB_ENABLE_LIBNX_CRYPTO
+	/* micro-ecc key storage for libnx backend */
+	uint8_t private_key[CHIAKI_UECC_PRIVATE_KEY_SIZE];
+	uint8_t public_key[CHIAKI_UECC_PUBLIC_KEY_SIZE];
 #else
+	/* OpenSSL */
 	struct ec_group_st *group;
 	struct ec_key_st *key_local;
 #endif
