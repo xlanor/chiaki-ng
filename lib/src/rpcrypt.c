@@ -2,9 +2,9 @@
 
 #include <chiaki/rpcrypt.h>
 
-#ifdef CHIAKI_LIB_ENABLE_MBEDTLS
-#include "mbedtls/aes.h"
-#include "mbedtls/md.h"
+#ifdef CHIAKI_LIB_ENABLE_LIBNX_CRYPTO
+#include <switch/crypto/hmac.h>
+#include "crypto/libnx/aes_cfb.h"
 #else
 #include <openssl/hmac.h>
 #include <openssl/evp.h>
@@ -2255,7 +2255,7 @@ static const uint8_t *rpcrypt_hmac_key(ChiakiRPCrypt *rpcrypt)
 	}
 }
 
-#ifdef CHIAKI_LIB_ENABLE_MBEDTLS
+#ifdef CHIAKI_LIB_ENABLE_LIBNX_CRYPTO
 CHIAKI_EXPORT ChiakiErrorCode chiaki_rpcrypt_generate_iv(ChiakiRPCrypt *rpcrypt, uint8_t *iv, uint64_t counter)
 {
 	const uint8_t *hmac_key = rpcrypt_hmac_key(rpcrypt);
@@ -2271,74 +2271,25 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_rpcrypt_generate_iv(ChiakiRPCrypt *rpcrypt,
 	buf[CHIAKI_RPCRYPT_KEY_SIZE + 6] = (uint8_t)((counter >> 0x08) & 0xff);
 	buf[CHIAKI_RPCRYPT_KEY_SIZE + 7] = (uint8_t)((counter >> 0x00) & 0xff);
 
-	uint8_t hmac[CHIAKI_RPCRYPT_KEY_SIZE];
-	unsigned int hmac_len = 0;
+	uint8_t hmac[32];
+	hmacSha256CalculateMac(hmac, hmac_key, HMAC_KEY_SIZE, buf, sizeof(buf));
 
-
-	mbedtls_md_context_t ctx;
-	mbedtls_md_type_t type = MBEDTLS_MD_SHA256;
-
-	mbedtls_md_init(&ctx);
-
-#define GOTO_ERROR(err) do { \
-	if((err) !=0){ \
-		goto error;} \
-	} while(0)
-	// https://tls.mbed.org/module-level-design-hashing
-	GOTO_ERROR(mbedtls_md_setup(&ctx, mbedtls_md_info_from_type(type) , 1));
-	GOTO_ERROR(mbedtls_md_hmac_starts(&ctx, hmac_key, HMAC_KEY_SIZE));
-	GOTO_ERROR(mbedtls_md_hmac_update(&ctx, (const unsigned char *) buf, sizeof(buf)));
-	GOTO_ERROR(mbedtls_md_hmac_finish(&ctx, hmac));
-#undef GOTO_ERROR
 	memcpy(iv, hmac, CHIAKI_RPCRYPT_KEY_SIZE);
-	mbedtls_md_free(&ctx);
 	return CHIAKI_ERR_SUCCESS;
-error:
-	mbedtls_md_free(&ctx);
-	return CHIAKI_ERR_UNKNOWN;
 }
-
 
 static ChiakiErrorCode chiaki_rpcrypt_crypt(ChiakiRPCrypt *rpcrypt, uint64_t counter, const uint8_t *in, uint8_t *out, size_t sz, bool encrypt)
 {
-
-#define GOTO_ERROR(err) do { \
-	if((err) !=0){ \
-		goto error;} \
-	} while(0)
-
-	// https://github.com/ARMmbed/mbedtls/blob/development/programs/aes/aescrypt2.c
-	// build aes context
-	mbedtls_aes_context ctx;
-	mbedtls_aes_init(&ctx);
-
-	// initialization vector
 	uint8_t iv[CHIAKI_RPCRYPT_KEY_SIZE];
 	ChiakiErrorCode err = chiaki_rpcrypt_generate_iv(rpcrypt, iv, counter);
 	if(err != CHIAKI_ERR_SUCCESS)
 		return err;
 
-	GOTO_ERROR(mbedtls_aes_setkey_enc(&ctx, rpcrypt->bright, 128));
 	size_t iv_off = 0;
-	if(encrypt)
-	{
-		GOTO_ERROR(mbedtls_aes_crypt_cfb128(&ctx, MBEDTLS_AES_ENCRYPT, sz, &iv_off, iv, in, out));
-	}
-	else
-	{
-		// the aes_crypt_cfb128 does not seems to use the setkey_dec
-		// GOTO_ERROR(mbedtls_aes_setkey_dec(&ctx, rpcrypt->bright, 128));
-		GOTO_ERROR(mbedtls_aes_crypt_cfb128(&ctx, MBEDTLS_AES_DECRYPT, sz, &iv_off, iv, in, out));
-	}
-
-#undef GOTO_ERROR
-	mbedtls_aes_free(&ctx);
+	if(chiaki_aes_cfb128_crypt(rpcrypt->bright, iv, &iv_off, in, out, sz, encrypt ? 1 : 0) != 0)
+		return CHIAKI_ERR_UNKNOWN;
 
 	return CHIAKI_ERR_SUCCESS;
-
-error:
-	mbedtls_aes_free(&ctx);
-	return CHIAKI_ERR_UNKNOWN;
 }
 
 #else
