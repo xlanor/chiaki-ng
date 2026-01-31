@@ -26,8 +26,7 @@ else()
 endif()
 tri_option(CHIAKI_ENABLE_FFMPEG_DECODER "Enable FFMPEG video decoder" ${CHIAKI_FFMPEG_DEFAULT})
 tri_option(CHIAKI_ENABLE_PI_DECODER "Enable Raspberry Pi-specific video decoder (requires libraspberrypi0 and libraspberrypi-doc)" AUTO)
-option(CHIAKI_LIB_ENABLE_MBEDTLS "Use mbedtls instead of OpenSSL as part of Chiaki Lib" OFF)
-option(CHIAKI_LIB_MBEDTLS_EXTERNAL_PROJECT "Fetch Mbed TLS instead of using system-provided libs" OFF)
+option(CHIAKI_LIB_ENABLE_LIBNX_CRYPTO "Use libnx crypto + micro-ecc instead of OpenSSL (for Nintendo Switch)" OFF)
 option(CHIAKI_LIB_OPENSSL_EXTERNAL_PROJECT "Use OpenSSL as CMake external project" OFF)
 option(CHIAKI_GUI_ENABLE_SDL_GAMECONTROLLER "Use SDL Gamecontroller for Input" ON)
 option(CHIAKI_CLI_ARGP_STANDALONE "Search for standalone argp lib for CLI" OFF)
@@ -66,9 +65,10 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake;${CMAKE_CURRENT
 set(CMAKE_CXX_STANDARD 11)
 
 if(CHIAKI_IS_SWITCH)
-	# force mbedtls as crypto lib
-	set(CHIAKI_LIB_ENABLE_MBEDTLS ON)
+	# Use libnx native crypto backend (no mbedTLS dependency)
+	set(CHIAKI_LIB_ENABLE_LIBNX_CRYPTO ON)
 	add_definitions(-D__SWITCH__)
+	add_definitions(-DCHIAKI_LIB_ENABLE_LIBNX_CRYPTO)
 endif()
 
 if(CHIAKI_USE_SYSTEM_JERASURE)
