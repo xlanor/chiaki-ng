@@ -2165,11 +2165,14 @@ static void* websocket_thread_func(void *user) {
             // waiting on offers
             chiaki_mutex_lock(&session->state_mutex);
             bool should_ack_offers =
-                // We're not expecting any offers after receiving one for the control port and before it's established, afterwards we expect
-                // one for the data port, so we don't auto-ACK in between
                 (session->state & SESSION_STATE_CTRL_OFFER_RECEIVED
                  && !(session->state & SESSION_STATE_CTRL_ESTABLISHED))
-                 // At this point all offers were received and we don't care for new ones anymore
+#ifdef __SWITCH__
+                // On Switch, session setup (RUDP/regist/ctrl) is slow, causing the PS5's
+                // DATA OFFER to go unACK'd for too long. Auto-ACK after CTRL is established
+                // so the PS5 keeps its data port active while we complete session setup.
+                || (session->state & SESSION_STATE_CTRL_ESTABLISHED)
+#endif
                 || session->state & SESSION_STATE_DATA_OFFER_RECEIVED;
             chiaki_mutex_unlock(&session->state_mutex);
             if (should_ack_offers && notif->type == NOTIFICATION_TYPE_SESSION_MESSAGE_CREATED)
