@@ -518,7 +518,13 @@ static void *session_thread_func(void *arg)
 	if(err != CHIAKI_ERR_SUCCESS)
 		QUIT(quit);
 
+#ifdef __SWITCH__
+	// On Switch, use a shorter timeout since PIN request/login arrive within ~500ms.
+	// The full 10-second wait delays DATA holepunch and causes remote connections to fail.
+	err = chiaki_cond_timedwait_pred(&session->state_cond, &session->state_mutex, 2000, session_check_state_pred_ctrl_start, session);
+#else
 	err = chiaki_cond_timedwait_pred(&session->state_cond, &session->state_mutex, SESSION_EXPECT_CTRL_START_MS, session_check_state_pred_ctrl_start, session);
+#endif
 	CHECK_STOP(quit_ctrl);
 
 	if(session->ctrl_failed)
@@ -556,9 +562,29 @@ static void *session_thread_func(void *arg)
 		session->login_pin = NULL;
 		session->login_pin_size = 0;
 		// wait for session id or new login pin request
+#ifdef __SWITCH__
+		err = chiaki_cond_timedwait_pred(&session->state_cond, &session->state_mutex, 2000, session_check_state_pred_ctrl_start, session);
+#else
 		err = chiaki_cond_timedwait_pred(&session->state_cond, &session->state_mutex, SESSION_EXPECT_CTRL_START_MS, session_check_state_pred_ctrl_start, session);
+#endif
 		CHECK_STOP(quit_ctrl);
 	}
+
+#ifdef __SWITCH__
+	// On Switch, the PS5 sends the session ID ~13 seconds after login (well past the
+	// 10-second timeout). Waiting wastes time that causes DATA holepunch to fail on
+	// remote networks because the PS5 stops probing its DATA port.
+	// Generate the fallback session ID immediately so DATA punch can start sooner.
+	if(!session->ctrl_session_id_received)
+	{
+		CHIAKI_LOGI(session->log, "Generating fallback session ID to avoid DATA holepunch delay");
+		chiaki_mutex_unlock(&session->state_mutex);
+		err = ctrl_message_set_fallback_session_id(&session->ctrl);
+		chiaki_mutex_lock(&session->state_mutex);
+		if(err != CHIAKI_ERR_SUCCESS)
+			goto ctrl_failed;
+	}
+#endif
 
 	chiaki_socket_t *data_sock = NULL;
 	if(session->rudp)
