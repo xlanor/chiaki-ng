@@ -518,13 +518,7 @@ static void *session_thread_func(void *arg)
 	if(err != CHIAKI_ERR_SUCCESS)
 		QUIT(quit);
 
-#ifdef __SWITCH__
-	// On Switch, use a shorter timeout since PIN request/login arrive within ~500ms.
-	// The full 10-second wait delays DATA holepunch and causes remote connections to fail.
-	err = chiaki_cond_timedwait_pred(&session->state_cond, &session->state_mutex, 2000, session_check_state_pred_ctrl_start, session);
-#else
 	err = chiaki_cond_timedwait_pred(&session->state_cond, &session->state_mutex, SESSION_EXPECT_CTRL_START_MS, session_check_state_pred_ctrl_start, session);
-#endif
 	CHECK_STOP(quit_ctrl);
 
 	if(session->ctrl_failed)
@@ -589,19 +583,33 @@ static void *session_thread_func(void *arg)
 	chiaki_socket_t *data_sock = NULL;
 	if(session->rudp)
 	{
-		ChiakiErrorCode err = holepunch_session_create_offer(session->holepunch_session);
-		if (err != CHIAKI_ERR_SUCCESS)
+#ifdef __SWITCH__
+		const int data_max_retries = 4;
+#else
+		const int data_max_retries = 1;
+#endif
+		ChiakiErrorCode hp_err = CHIAKI_ERR_UNKNOWN;
+		for(int data_attempt = 1; data_attempt <= data_max_retries; data_attempt++)
 		{
-			CHIAKI_LOGE(session->log, "!! Failed to create offer msg for data connection");
-			CHECK_STOP(quit_ctrl);
+			ChiakiErrorCode err = holepunch_session_create_offer(session->holepunch_session);
+			if (err != CHIAKI_ERR_SUCCESS)
+			{
+				CHIAKI_LOGE(session->log, "!! Failed to create offer msg for data connection");
+				CHECK_STOP(quit_ctrl);
+			}
+			CHIAKI_LOGI(session->log, "Punching hole for data connection (attempt %d/%d)", data_attempt, data_max_retries);
+			ChiakiEvent event_start = { 0 };
+			event_start.type = CHIAKI_EVENT_HOLEPUNCH;
+			event_start.data_holepunch.finished = false;
+			chiaki_session_send_event(session, &event_start);
+			hp_err = chiaki_holepunch_session_punch_hole(session->holepunch_session, CHIAKI_HOLEPUNCH_PORT_TYPE_DATA);
+			if (hp_err == CHIAKI_ERR_SUCCESS)
+				break;
+			CHIAKI_LOGW(session->log, "DATA holepunch attempt %d/%d failed", data_attempt, data_max_retries);
+			if(data_attempt < data_max_retries)
+				CHECK_STOP(quit_ctrl);
 		}
-		CHIAKI_LOGI(session->log, "Punching hole for data connection");
-		ChiakiEvent event_start = { 0 };
-		event_start.type = CHIAKI_EVENT_HOLEPUNCH;
-		event_start.data_holepunch.finished = false;
-		chiaki_session_send_event(session, &event_start);
-		err = chiaki_holepunch_session_punch_hole(session->holepunch_session, CHIAKI_HOLEPUNCH_PORT_TYPE_DATA);
-		if (err != CHIAKI_ERR_SUCCESS)
+		if (hp_err != CHIAKI_ERR_SUCCESS)
 		{
 			CHIAKI_LOGE(session->log, "!! Failed to punch hole for data connection.");
 			QUIT(quit_ctrl);
