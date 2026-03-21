@@ -3587,6 +3587,18 @@ static bool get_client_addr_remote_stun(Session *session, char *address, uint16_
 //     return true;
 // }
 
+// On BSD-based stacks (e.g. libnx), ICMP errors are delivered asynchronously to
+// unconnected UDP sockets. Reading SO_ERROR clears the queued error, preventing
+// it from failing the next sendto() to a different (reachable) destination.
+// On Linux this is a harmless no-op since unconnected UDP sockets don't queue
+// ICMP errors.
+static void clear_socket_error(chiaki_socket_t sock)
+{
+    int err_val = 0;
+    socklen_t err_len = sizeof(err_val);
+    getsockopt(sock, SOL_SOCKET, SO_ERROR, &err_val, &err_len);
+}
+
 /**
  * Linking to a responsive PlayStation candidate from the available console candidates
  *
@@ -3738,9 +3750,10 @@ static ChiakiErrorCode check_candidates(
             case AF_INET:
                 if(!CHIAKI_SOCKET_IS_INVALID(session->ipv4_sock))
                 {
+                    clear_socket_error(session->ipv4_sock);
                     if (sendto(session->ipv4_sock, (CHIAKI_SOCKET_BUF_TYPE) request_buf[0], sizeof(request_buf[0]), 0, (struct sockaddr *)&addrs[i], lens[i]) < 0)
                     {
-                        CHIAKI_LOGW(session->log, "check_candidates: Sending request failed for %s:%d with error: " CHIAKI_SOCKET_ERROR_FMT, candidate->addr, candidate->port, CHIAKI_SOCKET_ERROR_VALUE);
+                        CHIAKI_LOGW(session->log, "check_candidates: Sending request failed for %s:%d (type %d) with error: " CHIAKI_SOCKET_ERROR_FMT, candidate->addr, candidate->port, candidate->type, CHIAKI_SOCKET_ERROR_VALUE);
                         err = CHIAKI_ERR_NETWORK;
                         freeaddrinfo(addr_remote);
                         continue;
@@ -3752,6 +3765,7 @@ static ChiakiErrorCode check_candidates(
                     {
                         if(CHIAKI_SOCKET_IS_INVALID(socks[j]))
                             continue;
+                        clear_socket_error(socks[j]);
                         if (sendto(socks[j], (CHIAKI_SOCKET_BUF_TYPE) request_buf[0], sizeof(request_buf[0]), 0, (struct sockaddr *)&addrs[i], lens[i]) < 0)
                         {
                             CHIAKI_LOGW(session->log, "check_candidates: Sending request for socket %d failed for %s:%d with error, closing socket: " CHIAKI_SOCKET_ERROR_FMT, j, candidate->addr, candidate->port, CHIAKI_SOCKET_ERROR_VALUE);
@@ -3769,9 +3783,10 @@ static ChiakiErrorCode check_candidates(
             case AF_INET6:
                 if(!CHIAKI_SOCKET_IS_INVALID(session->ipv6_sock))
                 {
+                    clear_socket_error(session->ipv6_sock);
                     if (sendto(session->ipv6_sock, (CHIAKI_SOCKET_BUF_TYPE) request_buf[0], sizeof(request_buf[0]), 0, (struct sockaddr *)&addrs[i], lens[i]) < 0)
                     {
-                        CHIAKI_LOGW(session->log, "check_candidates: Sending request failed for %s:%d with error: " CHIAKI_SOCKET_ERROR_FMT, candidate->addr, candidate->port, CHIAKI_SOCKET_ERROR_VALUE);
+                        CHIAKI_LOGW(session->log, "check_candidates: Sending request failed for %s:%d (type %d) with error: " CHIAKI_SOCKET_ERROR_FMT, candidate->addr, candidate->port, candidate->type, CHIAKI_SOCKET_ERROR_VALUE);
                         err = CHIAKI_ERR_NETWORK;
                         freeaddrinfo(addr_remote);
                         continue;
@@ -3872,6 +3887,7 @@ static ChiakiErrorCode check_candidates(
                         if(CHIAKI_SOCKET_IS_INVALID(sock))
                             continue;
                         candidate = &candidates[i];
+                        clear_socket_error(sock);
                         if (sendto(sock, (CHIAKI_SOCKET_BUF_TYPE) request_buf[0], sizeof(request_buf[0]), 0, (struct sockaddr *)&addrs[i], lens[i]) < 0)
                         {
                             CHIAKI_LOGE(session->log, "check_candidates: Sending request failed for %s:%d with error: " CHIAKI_SOCKET_ERROR_FMT, candidate->addr, candidate->port, CHIAKI_SOCKET_ERROR_VALUE);
@@ -4053,6 +4069,7 @@ static ChiakiErrorCode check_candidates(
                 goto cleanup_sockets;
             if((session->stun_random_allocation || candidate->type == CANDIDATE_TYPE_DERIVED) && responses_received[i] == 0)
             {
+                clear_socket_error(candidate_sock);
                 if (sendto(candidate_sock, (CHIAKI_SOCKET_BUF_TYPE) request_buf[0], sizeof(request_buf[0]), 0, (struct sockaddr *)&addrs[i], lens[i]) < 0)
                 {
                     CHIAKI_LOGE(session->log, "check_candidates: Sending request failed for %s:%d with error: " CHIAKI_SOCKET_ERROR_FMT, candidate->addr, candidate->port, CHIAKI_SOCKET_ERROR_VALUE);
@@ -4103,6 +4120,7 @@ static ChiakiErrorCode check_candidates(
         }
         else
         {
+            clear_socket_error(candidate_sock);
             if (sendto(candidate_sock, (CHIAKI_SOCKET_BUF_TYPE) request_buf[responses], sizeof(request_buf[responses]), 0, (struct sockaddr *)&addrs[i], lens[i]) < 0)
             {
                 CHIAKI_LOGE(session->log, "check_candidates: Sending request failed for %s:%d with error: " CHIAKI_SOCKET_ERROR_FMT, candidate->addr, candidate->port, CHIAKI_SOCKET_ERROR_VALUE);
@@ -4319,6 +4337,7 @@ static ChiakiErrorCode send_responseto_ps(Session *session, uint8_t *req, chiaki
         xor_bytes(&confirm_buf[0x50], console_addr, 4);
         xor_bytes(&confirm_buf[0x54], console_port, 2);
 
+        clear_socket_error(*sock);
         if (sendto(*sock, (CHIAKI_SOCKET_BUF_TYPE) confirm_buf, sizeof(confirm_buf), 0, addr, len) < 0)
         {
             CHIAKI_LOGE(session->log, "check_candidates: Sending confirmation failed for %s:%d with error: %s", candidate->addr, candidate->port, CHIAKI_SOCKET_ERROR_VALUE);
