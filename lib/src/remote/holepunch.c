@@ -810,30 +810,135 @@ CHIAKI_EXPORT Session* chiaki_holepunch_session_init(
     return session;
 }
 
+#define UPNP_DISCOVER_TIMEOUT_MS 7000
+
+typedef struct upnp_discover_thread_args_t
+{
+    ChiakiLog *log;
+    UPNPGatewayInfo gw;
+    ChiakiErrorCode result;
+    bool done;
+    bool timed_out;
+    ChiakiMutex mutex;
+    ChiakiCond cond;
+} UPNPDiscoverThreadArgs;
+
+static void *upnp_discover_thread_func(void *arg)
+{
+    UPNPDiscoverThreadArgs *args = (UPNPDiscoverThreadArgs *)arg;
+    args->result = upnp_get_gateway_info(args->log, &args->gw);
+
+    chiaki_mutex_lock(&args->mutex);
+    args->done = true;
+    bool caller_gave_up = args->timed_out;
+    chiaki_cond_signal(&args->cond);
+    chiaki_mutex_unlock(&args->mutex);
+
+    if(caller_gave_up)
+    {
+        free(args->gw.data);
+        free(args->gw.urls);
+        chiaki_cond_fini(&args->cond);
+        chiaki_mutex_fini(&args->mutex);
+        free(args);
+    }
+    return NULL;
+}
+
 CHIAKI_EXPORT ChiakiErrorCode chiaki_holepunch_upnp_discover(Session *session)
 {
-    session->gw.data = calloc(1, sizeof(struct IGDdatas));
-    if(!session->gw.data)
+    UPNPDiscoverThreadArgs *args = calloc(1, sizeof(UPNPDiscoverThreadArgs));
+    if(!args)
+        return CHIAKI_ERR_MEMORY;
+
+    args->gw.data = calloc(1, sizeof(struct IGDdatas));
+    if(!args->gw.data)
     {
+        free(args);
         return CHIAKI_ERR_MEMORY;
     }
-    session->gw.urls = calloc(1, sizeof(struct UPNPUrls));
-    if(!session->gw.urls)
+    args->gw.urls = calloc(1, sizeof(struct UPNPUrls));
+    if(!args->gw.urls)
     {
-        free(session->gw.data);
+        free(args->gw.data);
+        free(args);
         return CHIAKI_ERR_MEMORY;
     }
-    ChiakiErrorCode err = upnp_get_gateway_info(session->log, &session->gw);
-    if (err == CHIAKI_ERR_SUCCESS)
+
+    args->log = session->log;
+    args->result = CHIAKI_ERR_UNKNOWN;
+    args->done = false;
+    args->timed_out = false;
+
+    ChiakiErrorCode err = chiaki_mutex_init(&args->mutex, false);
+    if(err != CHIAKI_ERR_SUCCESS)
+    {
+        free(args->gw.urls);
+        free(args->gw.data);
+        free(args);
+        session->gw_status = GATEWAY_STATUS_NOT_FOUND;
+        return CHIAKI_ERR_SUCCESS;
+    }
+
+    err = chiaki_cond_init(&args->cond);
+    if(err != CHIAKI_ERR_SUCCESS)
+    {
+        chiaki_mutex_fini(&args->mutex);
+        free(args->gw.urls);
+        free(args->gw.data);
+        free(args);
+        session->gw_status = GATEWAY_STATUS_NOT_FOUND;
+        return CHIAKI_ERR_SUCCESS;
+    }
+
+    ChiakiThread thread;
+    err = chiaki_thread_create(&thread, upnp_discover_thread_func, args);
+    if(err != CHIAKI_ERR_SUCCESS)
+    {
+        CHIAKI_LOGE(session->log, "Failed to create UPnP discovery thread");
+        chiaki_cond_fini(&args->cond);
+        chiaki_mutex_fini(&args->mutex);
+        free(args->gw.urls);
+        free(args->gw.data);
+        free(args);
+        session->gw_status = GATEWAY_STATUS_NOT_FOUND;
+        return CHIAKI_ERR_SUCCESS;
+    }
+
+    chiaki_mutex_lock(&args->mutex);
+    while(!args->done)
+    {
+        err = chiaki_cond_timedwait(&args->cond, &args->mutex, UPNP_DISCOVER_TIMEOUT_MS);
+        if(err == CHIAKI_ERR_TIMEOUT)
+            break;
+    }
+
+    if(!args->done)
+    {
+        CHIAKI_LOGW(session->log, "UPnP discovery timed out after %d ms, skipping", UPNP_DISCOVER_TIMEOUT_MS);
+        args->timed_out = true;
+        chiaki_mutex_unlock(&args->mutex);
+        session->gw_status = GATEWAY_STATUS_NOT_FOUND;
+        return CHIAKI_ERR_SUCCESS;
+    }
+    chiaki_mutex_unlock(&args->mutex);
+
+    chiaki_thread_join(&thread, NULL);
+
+    if (args->result == CHIAKI_ERR_SUCCESS)
+    {
+        session->gw = args->gw;
         session->gw_status = GATEWAY_STATUS_FOUND;
+    }
     else
     {
         session->gw_status = GATEWAY_STATUS_NOT_FOUND;
-        free(session->gw.data);
-        session->gw.data = NULL;
-        free(session->gw.urls);
-        session->gw.urls = NULL;
+        free(args->gw.data);
+        free(args->gw.urls);
     }
+    chiaki_cond_fini(&args->cond);
+    chiaki_mutex_fini(&args->mutex);
+    free(args);
     return CHIAKI_ERR_SUCCESS;
 }
 
@@ -3508,27 +3613,25 @@ static ChiakiErrorCode get_client_addr_local(Session *session, Candidate *local_
  */
 static ChiakiErrorCode upnp_get_gateway_info(ChiakiLog *log, UPNPGatewayInfo *info)
 {
-    ChiakiErrorCode err = CHIAKI_ERR_SUCCESS;
     int success = 0;
     struct UPNPDev *devlist = upnpDiscover(
         2000 /** ms, delay*/, NULL, NULL, 0, 0, 2, &success);
-    if (devlist == NULL || err != UPNPDISCOVER_SUCCESS) {
-        CHIAKI_LOGI(log, "Failed to find UPnP-capable devices on network: err=%d", err);
+    if (devlist == NULL || success != UPNPDISCOVER_SUCCESS) {
+        CHIAKI_LOGI(log, "Failed to find UPnP-capable devices on network: err=%d", success);
         return CHIAKI_ERR_NETWORK;
     }
 
+    ChiakiErrorCode err = CHIAKI_ERR_SUCCESS;
 #if MINIUPNPC_API_VERSION >= 18
-    success = UPNP_GetValidIGD(devlist, info->urls, info->data, info->lan_ip, sizeof(info->lan_ip), NULL, 0);
+    int igd_ret = UPNP_GetValidIGD(devlist, info->urls, info->data, info->lan_ip, sizeof(info->lan_ip), NULL, 0);
 #else
-    success = UPNP_GetValidIGD(devlist, info->urls, info->data, info->lan_ip, sizeof(info->lan_ip));
+    int igd_ret = UPNP_GetValidIGD(devlist, info->urls, info->data, info->lan_ip, sizeof(info->lan_ip));
 #endif
-    if (success != 1) {
-        CHIAKI_LOGI(log, "Failed to discover internet gateway via UPnP: err=%d", err);
+    if (igd_ret != 1) {
+        CHIAKI_LOGI(log, "Failed to discover internet gateway via UPnP: err=%d", igd_ret);
         err = CHIAKI_ERR_NETWORK;
-        goto cleanup;
     }
 
-cleanup:
     freeUPNPDevlist(devlist);
     return err;
 }
