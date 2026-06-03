@@ -9,7 +9,11 @@
 #define FEEDBACK_STATE_TIMEOUT_MAX_MS 200 // maximum time to wait between sending 2 packets
 
 #define FEEDBACK_HISTORY_BUFFER_SIZE 0x10
+#ifdef __SWITCH__
+#define FEEDBACK_HISTORY_RESEND_EVENT_COUNT 0x10
+#else
 #define FEEDBACK_HISTORY_RESEND_EVENT_COUNT 0x4
+#endif
 
 static void *feedback_sender_thread_func(void *user);
 static void feedback_sender_send_state(ChiakiFeedbackSender *feedback_sender, const ChiakiControllerState *state);
