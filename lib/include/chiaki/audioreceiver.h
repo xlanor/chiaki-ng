@@ -38,6 +38,7 @@ typedef struct chiaki_audio_receiver_t
 	bool playback_started;
 	bool frame_index_startup; // whether frame_index_prev has definitely not wrapped yet
 	ChiakiPacketStats *packet_stats;
+	void *pscloud_audio_reassembler;
 	struct {
 		bool occupied;
 		ChiakiSeqNum16 frame_index;

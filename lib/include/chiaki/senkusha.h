@@ -27,6 +27,12 @@ typedef struct senkusha_t
 	uint16_t ping_index;
 	uint32_t ping_tag;
 	uint32_t mtu_id;
+	int protocol_version;
+	char *cloud_launch_spec;
+
+	size_t sent_big_size;
+	uint8_t *echo_reassembly_buf;
+	size_t echo_reassembly_pos;
 
 	/**
 	 * signaled on change of state_finished or should_stop

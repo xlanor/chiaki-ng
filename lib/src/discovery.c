@@ -19,6 +19,90 @@
 #include <arpa/inet.h>
 #endif
 
+#define DISCOVERY_SEND_ERROR_LOG_INTERVAL_MS 60000
+
+static bool discovery_send_errno_is_expected_offline(int err)
+{
+#ifdef _WIN32
+	switch(err)
+	{
+		case WSAENETDOWN:
+		case WSAENETUNREACH:
+		case WSAEHOSTUNREACH:
+		case WSAEADDRNOTAVAIL:
+		case WSAENETRESET:
+		case WSAESHUTDOWN:
+			return true;
+		default:
+			return false;
+	}
+#else
+	switch(err)
+	{
+		case EPIPE:
+		case ENETDOWN:
+		case ENETUNREACH:
+		case EHOSTUNREACH:
+		case EADDRNOTAVAIL:
+		case ENETRESET:
+#ifdef ESHUTDOWN
+		case ESHUTDOWN:
+#endif
+			return true;
+		default:
+			return false;
+	}
+#endif
+}
+
+static void discovery_send_log_recovery(ChiakiDiscovery *discovery)
+{
+	if(discovery->suppressed_send_error_count > 0)
+	{
+		CHIAKI_LOGI(discovery->log,
+			"Discovery send recovered after %u suppressed repeated failures",
+			discovery->suppressed_send_error_count);
+	}
+
+	discovery->last_send_errno = 0;
+	discovery->last_send_error_log_ms = 0;
+	discovery->suppressed_send_error_count = 0;
+}
+
+static void discovery_send_log_failure(ChiakiDiscovery *discovery, int err)
+{
+	uint64_t now_ms = chiaki_time_now_monotonic_ms();
+	if(discovery->last_send_errno == err
+		&& discovery->last_send_error_log_ms != 0
+		&& now_ms - discovery->last_send_error_log_ms < DISCOVERY_SEND_ERROR_LOG_INTERVAL_MS)
+	{
+		discovery->suppressed_send_error_count++;
+		return;
+	}
+
+	if(discovery->suppressed_send_error_count > 0)
+	{
+		CHIAKI_LOGW(discovery->log,
+			"Discovery send still failing after %u suppressed repeats: %s",
+			discovery->suppressed_send_error_count,
+			strerror(err));
+	}
+	else if(discovery_send_errno_is_expected_offline(err))
+	{
+		CHIAKI_LOGW(discovery->log,
+			"Discovery send failed while network appears unavailable: %s",
+			strerror(err));
+	}
+	else
+	{
+		CHIAKI_LOGE(discovery->log, "Discovery failed to send: %s", strerror(err));
+	}
+
+	discovery->last_send_errno = err;
+	discovery->last_send_error_log_ms = now_ms;
+	discovery->suppressed_send_error_count = 0;
+}
+
 const char *chiaki_discovery_host_state_string(ChiakiDiscoveryHostState state)
 {
 	switch(state)
@@ -144,6 +228,9 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_discovery_init(ChiakiDiscovery *discovery, 
 		return CHIAKI_ERR_INVALID_DATA;
 
 	discovery->log = log;
+	discovery->last_send_errno = 0;
+	discovery->last_send_error_log_ms = 0;
+	discovery->suppressed_send_error_count = 0;
 
 	discovery->socket = socket(family, SOCK_DGRAM, IPPROTO_UDP);
 	if(CHIAKI_SOCKET_IS_INVALID(discovery->socket))
@@ -251,9 +338,12 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_discovery_send(ChiakiDiscovery *discovery, 
 	int rc = sendto_broadcast(discovery->log, discovery->socket, buf, (size_t)len + 1, 0, addr, addr_size);
 	if(rc < 0 && addr->sa_family == AF_INET)
 	{
-		CHIAKI_LOGE(discovery->log, "Discovery failed to send: %s", strerror(errno));
+		discovery_send_log_failure(discovery, errno);
 		return CHIAKI_ERR_NETWORK;
 	}
+
+	if(rc >= 0)
+		discovery_send_log_recovery(discovery);
 
 	return CHIAKI_ERR_SUCCESS;
 }

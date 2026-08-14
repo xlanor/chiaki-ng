@@ -138,6 +138,7 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_ctrl_init(ChiakiCtrl *ctrl, ChiakiSession *
 	chiaki_mutex_lock(&ctrl->notif_mutex);
 	ctrl->session = session;
 
+	ctrl->thread_started = false;
 	ctrl->should_stop = false;
 	ctrl->login_pin_entered = false;
 	ctrl->login_pin_requested = false;
@@ -174,6 +175,7 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_ctrl_start(ChiakiCtrl *ctrl)
 	if(err != CHIAKI_ERR_SUCCESS)
 		return err;
 
+	ctrl->thread_started = true;
 	chiaki_thread_set_name(&ctrl->thread, "Chiaki Ctrl");
 	return err;
 }
@@ -190,6 +192,9 @@ CHIAKI_EXPORT void chiaki_ctrl_stop(ChiakiCtrl *ctrl)
 
 CHIAKI_EXPORT ChiakiErrorCode chiaki_ctrl_join(ChiakiCtrl *ctrl)
 {
+	if(!ctrl->thread_started)
+		return CHIAKI_ERR_SUCCESS;
+	ctrl->thread_started = false;
 	return chiaki_thread_join(&ctrl->thread, NULL);
 }
 

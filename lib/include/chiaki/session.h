@@ -88,6 +88,15 @@ typedef struct chiaki_connect_info_t
 	chiaki_socket_t *rudp_sock;
 	uint8_t psn_account_id[CHIAKI_PSN_ACCOUNT_ID_SIZE];
 	double packet_loss_max;
+	ChiakiServiceType service_type;
+	const char *cloud_launch_spec;
+	const char *cloud_handshake_key;
+	const char *cloud_session_id;
+	uint16_t cloud_port;
+	uint8_t cloud_psn_wrapper_type;
+	uint32_t cloud_mtu_in;
+	uint32_t cloud_mtu_out;
+	uint64_t cloud_rtt_us;
 	bool enable_idr_on_fec_failure;
 } ChiakiConnectInfo;
 
@@ -240,6 +249,11 @@ typedef struct chiaki_session_t
 	uint64_t rtt_us;
 	bool dontfrag;
 	ChiakiECDH ecdh;
+	ChiakiServiceType service_type;
+	const char *cloud_launch_spec;
+	const char *cloud_handshake_key;
+	uint16_t cloud_port;
+	uint8_t cloud_psn_wrapper_type;
 
 	ChiakiQuitReason quit_reason;
 	char *quit_reason_str; // additional reason string from remote

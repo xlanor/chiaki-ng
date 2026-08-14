@@ -117,6 +117,9 @@ typedef struct chiaki_takion_connect_info_t
 	bool enable_dualsense;
 	uint8_t protocol_version;
 	bool close_socket; // close socket when finishing takion
+	ChiakiServiceType service_type;
+	uint8_t psn_wrapper_type;
+	bool is_ping_handshake;
 } ChiakiTakionConnectInfo;
 
 
@@ -124,6 +127,9 @@ typedef struct chiaki_takion_t
 {
 	ChiakiLog *log;
 	uint8_t version;
+	ChiakiServiceType service_type;
+	uint8_t psn_wrapper_type;
+	bool is_ping_handshake;
 
 	// Whether or not audio or video is disabled from further processing beyond basic ack
 	ChiakiDisableAudioVideo disable_audio_video;
@@ -196,7 +202,7 @@ static inline void chiaki_takion_set_crypt(ChiakiTakion *takion, ChiakiGKCrypt *
 	takion->gkcrypt_remote = gkcrypt_remote;
 }
 
-CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_packet_mac(ChiakiGKCrypt *crypt, uint8_t *buf, size_t buf_size, uint64_t key_pos, uint8_t *mac_out, uint8_t *mac_old_out);
+CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_packet_mac(ChiakiGKCrypt *crypt, uint8_t *buf, size_t buf_size, uint64_t key_pos, uint8_t *mac_out, uint8_t *mac_old_out, bool has_psn_wrapper);
 
 /**
  * Get a new key pos and advance by data_size.

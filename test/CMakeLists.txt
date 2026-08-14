@@ -15,7 +15,9 @@ set(CHIAKI_UNIT_SOURCES
 				test_log.c
 				test_log.h
 				bitstream.c
-				regist.c)
+				regist.c
+				cloudcatalog_merge.c
+				cloudsession_kamaji.c)
 
 if(CHIAKI_ENABLE_FFMPEG_DECODER)
 	list(APPEND CHIAKI_UNIT_SOURCES ffmpegdecoder.c)
@@ -25,12 +27,13 @@ add_executable(chiaki-unit ${CHIAKI_UNIT_SOURCES})
 add_test(NAME unit COMMAND chiaki-unit)
 
 target_link_libraries(chiaki-unit chiaki-lib munit)
+if(TARGET PkgConfig::json-c)
+	target_link_libraries(chiaki-unit PkgConfig::json-c)
+endif()
 
 if(CHIAKI_ENABLE_FFMPEG_DECODER)
 	target_link_libraries(chiaki-unit FFMPEG::avcodec FFMPEG::avutil)
 endif()
-
-add_test(unit chiaki-unit)
 
 # libnx crypto backend test - tests our micro-ecc, aes_cfb, and gmac implementations
 # using OpenSSL-based stubs of the libnx API

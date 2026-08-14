@@ -32,6 +32,7 @@ typedef struct chiaki_ctrl_t
 {
 	struct chiaki_session_t *session;
 	ChiakiThread thread;
+	bool thread_started;
 
 	bool should_stop;
 	bool login_pin_entered;
