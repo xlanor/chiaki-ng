@@ -7,6 +7,7 @@
 #include "thread.h"
 #include "stoppipe.h"
 #include "log.h"
+#include "time.h"
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -84,6 +85,9 @@ typedef struct chiaki_discovery_t
 	ChiakiLog *log;
 	chiaki_socket_t socket;
 	struct sockaddr_storage local_addr;
+	int last_send_errno;
+	uint64_t last_send_error_log_ms;
+	uint32_t suppressed_send_error_count;
 } ChiakiDiscovery;
 
 CHIAKI_EXPORT ChiakiErrorCode chiaki_discovery_init(ChiakiDiscovery *discovery, ChiakiLog *log, sa_family_t family);

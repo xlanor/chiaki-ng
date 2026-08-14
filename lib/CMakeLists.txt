@@ -40,6 +40,8 @@ set(HEADER_FILES
 		include/chiaki/opusencoder.h
 		include/chiaki/orientation.h
 		include/chiaki/bitstream.h
+		include/chiaki/cloudcatalog.h
+		include/chiaki/cloudsession.h
 		include/chiaki/remote/holepunch.h
 		include/chiaki/remote/rudp.h
 		include/chiaki/remote/rudpsendbuffer.h)
@@ -68,6 +70,7 @@ set(SOURCE_FILES
 		src/audiosender.c
 		src/videoreceiver.c
 		src/frameprocessor.c
+		src/cloud/pscloud_audio_reassembler.c
 		src/packetstats.c
 		src/discovery.c
 		src/congestioncontrol.c
@@ -85,6 +88,19 @@ set(SOURCE_FILES
 		src/opusencoder.c
 		src/orientation.c
 		src/bitstream.c
+		src/cloud/curl_http.h
+		src/cloud/curl_http.c
+		src/cloud/cloudcatalog_internal.h
+		src/cloud/cloudcatalog_util.c
+		src/cloud/cloudcatalog_consts.c
+		src/cloud/cloudcatalog_cache.c
+		src/cloud/cloudcatalog_merge.c
+		src/cloud/cloudcatalog_fetch.c
+		src/cloud/cloudcatalog_unified.c
+		src/cloud/cloudsession.c
+		src/cloud/cloudsession_ping.c
+		src/cloud/cloudsession_gaikai.c
+		src/cloud/cloudsession_kamaji.c
 		src/remote/holepunch.c
 		src/remote/rudp.c
 		src/remote/rudpsendbuffer.c)
@@ -151,6 +167,7 @@ if(APPLE AND NOT IOS AND NOT TVOS)
 endif()
 
 target_include_directories(chiaki-lib PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_include_directories(chiaki-lib PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/cloud")
 
 find_package(Threads REQUIRED)
 target_link_libraries(chiaki-lib Threads::Threads)
@@ -234,4 +251,13 @@ endif()
 if(CHIAKI_ENABLE_TESTS)
 	add_executable(holepunch-test include/chiaki/remote/holepunch.h src/remote/holepunch-test.c)
 	target_link_libraries(holepunch-test chiaki-lib)
+
+	if(NOT ANDROID AND NOT IOS)
+		add_executable(cloudcatalog-test test_cloudcatalog/cloudcatalog-test.c)
+		target_link_libraries(cloudcatalog-test chiaki-lib)
+
+		add_executable(cloudsession-probe test_cloudsession/cloudsession-probe.c)
+		target_link_libraries(cloudsession-probe chiaki-lib)
+		target_include_directories(cloudsession-probe PRIVATE src/cloud)
+	endif()
 endif()

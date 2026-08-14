@@ -51,7 +51,8 @@ typedef enum {
 	STATE_EXPECT_PROTOCOL_ACK,
 	STATE_EXPECT_PONG,
 	STATE_EXPECT_MTU,
-	STATE_EXPECT_CLIENT_MTU_COMMAND
+	STATE_EXPECT_CLIENT_MTU_COMMAND,
+	STATE_EXPECT_BIG_ECHO_COMPLETE
 } SenkushaState;
 
 static ChiakiErrorCode senkusha_run_rtt_test(ChiakiSenkusha *senkusha, uint16_t ping_test_index, uint16_t ping_count, uint64_t *rtt_us);
@@ -89,6 +90,11 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_senkusha_init(ChiakiSenkusha *senkusha, Chi
 	senkusha->data_ack_seq_num_expected = 0;
 	senkusha->ping_tag = 0;
 	senkusha->pong_time_us = 0;
+	senkusha->protocol_version = 0;
+	senkusha->cloud_launch_spec = NULL;
+	senkusha->sent_big_size = 0;
+	senkusha->echo_reassembly_buf = NULL;
+	senkusha->echo_reassembly_pos = 0;
 
 	chiaki_key_state_init(&senkusha->takion.key_state);
 
@@ -145,17 +151,34 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_senkusha_run(ChiakiSenkusha *senkusha, uint
 		}
 
 		memcpy(takion_info.sa, session->connect_info.host_addrinfo_selected->ai_addr, takion_info.sa_len);
-		err = set_port(takion_info.sa, htons(SENKUSHA_PORT));
+		uint16_t port = (chiaki_service_type_is_cloud(session->service_type) && session->cloud_port > 0)
+			? session->cloud_port
+			: SENKUSHA_PORT;
+		err = set_port(takion_info.sa, htons(port));
 		assert(err == CHIAKI_ERR_SUCCESS);
 	}
 	else
 		takion_info.close_socket = false;
-	takion_info.ip_dontfrag = true;
+	takion_info.ip_dontfrag = !chiaki_service_type_is_cloud(session->service_type);
 
 	takion_info.enable_crypt = false;
 	takion_info.disable_audio_video = false;
 	takion_info.enable_dualsense = session->connect_info.enable_dualsense;
-	takion_info.protocol_version = 7;
+	if(senkusha->protocol_version == 0)
+	{
+		if(!chiaki_service_type_is_cloud(session->service_type))
+			senkusha->protocol_version = 7;
+		else if(session->service_type == CHIAKI_SERVICE_TYPE_PSCLOUD)
+			senkusha->protocol_version = 12;
+		else
+			senkusha->protocol_version = 9;
+	}
+	takion_info.protocol_version = senkusha->protocol_version;
+	takion_info.service_type = session->service_type;
+	takion_info.psn_wrapper_type = chiaki_service_type_is_cloud(session->service_type)
+		? session->cloud_psn_wrapper_type
+		: 0;
+	takion_info.is_ping_handshake = true;
 
 	takion_info.cb = senkusha_takion_cb;
 	takion_info.cb_user = senkusha;
@@ -186,42 +209,52 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_senkusha_run(ChiakiSenkusha *senkusha, uint
 		else
 			CHIAKI_LOGE(session->log, "Senkusha Takion connect failed");
 
-		QUIT(quit_takion);
+			QUIT(quit_takion);
 	}
 
-	CHIAKI_LOGI(session->log, "Setting takion versions");
-
-	senkusha->state = STATE_EXPECT_PROTOCOL_ACK;
-	senkusha->state_finished = false;
-	senkusha->state_failed = false;
-
-	err = senkusha_set_version(senkusha);
-	if(err != CHIAKI_ERR_SUCCESS)
+	if(!chiaki_service_type_is_cloud(session->service_type))
 	{
-		CHIAKI_LOGE(session->log, "Senkusha failed to set takion version");
-		QUIT(quit_takion);
-	}
-	err = chiaki_cond_timedwait_pred(&senkusha->state_cond, &senkusha->state_mutex, EXPECT_TIMEOUT_MS, state_finished_cond_check, senkusha);
-	assert(err == CHIAKI_ERR_SUCCESS || err == CHIAKI_ERR_TIMEOUT);
+		CHIAKI_LOGI(session->log, "Setting takion versions");
 
-	if(!senkusha->state_finished)
+		senkusha->state = STATE_EXPECT_PROTOCOL_ACK;
+		senkusha->state_finished = false;
+		senkusha->state_failed = false;
+
+		err = senkusha_set_version(senkusha);
+		if(err != CHIAKI_ERR_SUCCESS)
+		{
+			CHIAKI_LOGE(session->log, "Senkusha failed to set takion version");
+			QUIT(quit_takion);
+		}
+		err = chiaki_cond_timedwait_pred(&senkusha->state_cond, &senkusha->state_mutex, EXPECT_TIMEOUT_MS, state_finished_cond_check, senkusha);
+		assert(err == CHIAKI_ERR_SUCCESS || err == CHIAKI_ERR_TIMEOUT);
+
+		if(!senkusha->state_finished)
+		{
+			if(err == CHIAKI_ERR_TIMEOUT)
+				CHIAKI_LOGE(session->log, "Senkusha set takion version receive timeout");
+
+			if(senkusha->should_stop)
+				err = CHIAKI_ERR_CANCELED;
+			else
+				CHIAKI_LOGE(session->log, "Senkusha didn't receive protocol request ack");
+
+			QUIT(quit_takion);
+		}
+
+		CHIAKI_LOGI(session->log, "Senkusha successfully set takion version");
+	}
+	else
 	{
-		if(err == CHIAKI_ERR_TIMEOUT)
-			CHIAKI_LOGE(session->log, "Senkusha set takion version receive timeout");
-
-		if(senkusha->should_stop)
-			err = CHIAKI_ERR_CANCELED;
-		else
-			CHIAKI_LOGE(session->log, "Senkusha didn't receive protocol request ack");
-
-		QUIT(quit_takion);
+		CHIAKI_LOGI(session->log, "Skipping takion version setting for cloud streaming");
 	}
-
-	CHIAKI_LOGI(session->log, "Senkusha successfully set takion version");
 
 	CHIAKI_LOGI(session->log, "Senkusha sending big");
 
-	senkusha->state = STATE_EXPECT_BANG;
+	if(chiaki_service_type_is_cloud(session->service_type))
+		senkusha->state = STATE_EXPECT_BIG_ECHO_COMPLETE;
+	else
+		senkusha->state = STATE_EXPECT_BANG;
 	senkusha->state_finished = false;
 	senkusha->state_failed = false;
 	err = senkusha_send_big(senkusha);
@@ -231,36 +264,63 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_senkusha_run(ChiakiSenkusha *senkusha, uint
 		QUIT(quit_takion);
 	}
 
-	err = chiaki_cond_timedwait_pred(&senkusha->state_cond, &senkusha->state_mutex, EXPECT_TIMEOUT_MS, state_finished_cond_check, senkusha);
-	assert(err == CHIAKI_ERR_SUCCESS || err == CHIAKI_ERR_TIMEOUT);
-
-	if(!senkusha->state_finished)
+	if(chiaki_service_type_is_cloud(session->service_type))
 	{
-		if(err == CHIAKI_ERR_TIMEOUT)
-			CHIAKI_LOGE(session->log, "Senkusha bang receive timeout");
-
-		if(senkusha->should_stop)
-			err = CHIAKI_ERR_CANCELED;
+		err = chiaki_cond_timedwait_pred(&senkusha->state_cond, &senkusha->state_mutex, 2000, state_finished_cond_check, senkusha);
+		if(!senkusha->state_finished)
+			CHIAKI_LOGW(session->log, "Senkusha BIG echo timeout after 2s, proceeding anyway");
 		else
-			CHIAKI_LOGE(session->log, "Senkusha didn't receive bang");
+			CHIAKI_LOGI(session->log, "Senkusha BIG echo complete, proceeding to RTT test");
 
-		QUIT(quit_takion);
+		err = senkusha_run_rtt_test(senkusha, 0, SENKUSHA_PING_COUNT_DEFAULT, rtt_us);
+		if(err != CHIAKI_ERR_SUCCESS)
+		{
+			CHIAKI_LOGE(senkusha->log, "Senkusha Ping Test failed");
+			goto disconnect;
+		}
 	}
-
-	CHIAKI_LOGI(session->log, "Senkusha successfully received bang");
-
-	err = senkusha_run_rtt_test(senkusha, 0, SENKUSHA_PING_COUNT_DEFAULT, rtt_us);
-	if(err != CHIAKI_ERR_SUCCESS)
+	else
 	{
-		CHIAKI_LOGE(senkusha->log, "Senkusha Ping Test failed");
-		goto disconnect;
+		err = chiaki_cond_timedwait_pred(&senkusha->state_cond, &senkusha->state_mutex, EXPECT_TIMEOUT_MS, state_finished_cond_check, senkusha);
+		assert(err == CHIAKI_ERR_SUCCESS || err == CHIAKI_ERR_TIMEOUT);
+
+		if(!senkusha->state_finished)
+		{
+			if(err == CHIAKI_ERR_TIMEOUT)
+				CHIAKI_LOGE(session->log, "Senkusha bang receive timeout");
+
+			if(senkusha->should_stop)
+				err = CHIAKI_ERR_CANCELED;
+			else
+				CHIAKI_LOGE(session->log, "Senkusha didn't receive bang");
+
+			QUIT(quit_takion);
+		}
+
+		CHIAKI_LOGI(session->log, "Senkusha successfully received bang");
+
+		err = senkusha_run_rtt_test(senkusha, 0, SENKUSHA_PING_COUNT_DEFAULT, rtt_us);
+		if(err != CHIAKI_ERR_SUCCESS)
+		{
+			CHIAKI_LOGE(senkusha->log, "Senkusha Ping Test failed");
+			goto disconnect;
+		}
 	}
 
 	uint64_t mtu_timeout_ms = (*rtt_us * 5) / 1000;
 	if(mtu_timeout_ms < 5)
 		mtu_timeout_ms = 5;
-	if(mtu_timeout_ms > 500)
+	if(chiaki_service_type_is_cloud(session->service_type))
+	{
+		if(mtu_timeout_ms < 200)
+			mtu_timeout_ms = 200;
+		if(mtu_timeout_ms > 1000)
+			mtu_timeout_ms = 1000;
+	}
+	else if(mtu_timeout_ms > 500)
+	{
 		mtu_timeout_ms = 500;
+	}
 
 	err = senkusha_run_mtu_in_test(senkusha, 576, 1454, 3, mtu_timeout_ms, mtu_in);
 	if(err != CHIAKI_ERR_SUCCESS)
@@ -286,6 +346,9 @@ quit_takion:
 	chiaki_takion_close(&senkusha->takion);
 	CHIAKI_LOGI(session->log, "Senkusha closed takion");
 quit:
+	free(senkusha->echo_reassembly_buf);
+	senkusha->echo_reassembly_buf = NULL;
+	senkusha->echo_reassembly_pos = 0;
 	return err;
 }
 
@@ -336,9 +399,23 @@ static ChiakiErrorCode senkusha_run_rtt_test(ChiakiSenkusha *senkusha, uint16_t 
 		senkusha->ping_index = ping_index;
 		senkusha->ping_tag = tag;
 
-		uint64_t time_start_us = chiaki_time_now_monotonic_us();
+			uint64_t time_start_us = chiaki_time_now_monotonic_us();
 
-		err = chiaki_takion_send_raw(&senkusha->takion, data, sizeof(data));
+			uint8_t *ping_data = data;
+			size_t ping_data_size = sizeof(data);
+			uint8_t wrapped_data[sizeof(data) + 4];
+			if(chiaki_service_type_is_cloud(senkusha->session->service_type) && senkusha->takion.psn_wrapper_type > 0)
+			{
+				memmove(wrapped_data + 4, data, sizeof(data));
+				wrapped_data[0] = 0x00;
+				wrapped_data[1] = 0x00;
+				wrapped_data[2] = 0x00;
+				wrapped_data[3] = senkusha->takion.psn_wrapper_type;
+				ping_data = wrapped_data;
+				ping_data_size = sizeof(data) + 4;
+			}
+
+			err = chiaki_takion_send_raw(&senkusha->takion, ping_data, ping_data_size);
 		if(err != CHIAKI_ERR_SUCCESS)
 		{
 			CHIAKI_LOGE(senkusha->log, "Senkusha failed to send ping");
@@ -384,6 +461,15 @@ static ChiakiErrorCode senkusha_run_rtt_test(ChiakiSenkusha *senkusha, uint16_t 
 
 	*rtt_us = rtt_us_acc / pings_successful;
 	CHIAKI_LOGI(senkusha->log, "Senkusha determined average RTT = %.3f ms", (float)(*rtt_us) * 0.001f);
+
+	if(senkusha->session && chiaki_service_type_is_cloud(senkusha->session->service_type))
+	{
+		uint64_t offset_us = (uint64_t)CHIAKI_CLOUD_RTT_SAFETY_OFFSET_MS * 1000;
+		uint64_t floor_us = (uint64_t)CHIAKI_CLOUD_RTT_MIN_MS * 1000;
+		*rtt_us = (*rtt_us >= offset_us + floor_us) ? (*rtt_us - offset_us) : floor_us;
+		CHIAKI_LOGI(senkusha->log, "Applied cloud RTT safety offset (-%d ms) -> %.3f ms",
+			CHIAKI_CLOUD_RTT_SAFETY_OFFSET_MS, (float)(*rtt_us) * 0.001f);
+	}
 
 	return CHIAKI_ERR_SUCCESS;
 }
@@ -548,7 +634,27 @@ static ChiakiErrorCode senkusha_run_mtu_out_test(ChiakiSenkusha *senkusha, uint3
 
 			CHIAKI_LOGI(senkusha->log, "Senkusha MTU %u out ping attempt %u", (unsigned int)cur, (unsigned int)attempt);
 
-			err = chiaki_takion_send_raw(&senkusha->takion, packet_buf, cur - MTU_UDP_PACKET_ADD);
+				size_t mtu_packet_size = cur - MTU_UDP_PACKET_ADD;
+				uint8_t *mtu_packet_data = packet_buf;
+				uint8_t mtu_wrapped_data[1500];
+				if(chiaki_service_type_is_cloud(senkusha->session->service_type) && senkusha->takion.psn_wrapper_type > 0)
+				{
+					if(mtu_packet_size + 4 > sizeof(mtu_wrapped_data))
+					{
+						CHIAKI_LOGE(senkusha->log, "Senkusha MTU packet too large for wrapper buffer");
+						err = CHIAKI_ERR_INVALID_DATA;
+						goto beach;
+					}
+					memmove(mtu_wrapped_data + 4, packet_buf, mtu_packet_size);
+					mtu_wrapped_data[0] = 0x00;
+					mtu_wrapped_data[1] = 0x00;
+					mtu_wrapped_data[2] = 0x00;
+					mtu_wrapped_data[3] = senkusha->takion.psn_wrapper_type;
+					mtu_packet_data = mtu_wrapped_data;
+					mtu_packet_size += 4;
+				}
+
+				err = chiaki_takion_send_raw(&senkusha->takion, mtu_packet_data, mtu_packet_size);
 			if(err != CHIAKI_ERR_SUCCESS)
 			{
 				CHIAKI_LOGE(senkusha->log, "Senkusha failed to send ping");
@@ -640,6 +746,46 @@ static void senkusha_takion_cb(ChiakiTakionEvent *event, void *user)
 
 static void senkusha_takion_data(ChiakiSenkusha *senkusha, ChiakiTakionMessageDataType data_type, uint8_t *buf, size_t buf_size)
 {
+	chiaki_mutex_lock(&senkusha->state_mutex);
+	if(senkusha->state == STATE_EXPECT_BIG_ECHO_COMPLETE && senkusha->echo_reassembly_buf)
+	{
+		size_t cap = senkusha->sent_big_size + 256;
+		size_t remaining = cap > senkusha->echo_reassembly_pos ? cap - senkusha->echo_reassembly_pos : 0;
+		size_t to_copy = buf_size < remaining ? buf_size : remaining;
+		if(to_copy > 0)
+		{
+			memcpy(senkusha->echo_reassembly_buf + senkusha->echo_reassembly_pos, buf, to_copy);
+			senkusha->echo_reassembly_pos += to_copy;
+		}
+
+		if(senkusha->echo_reassembly_pos >= senkusha->sent_big_size)
+		{
+			const char *spec = senkusha->cloud_launch_spec;
+			size_t spec_len = spec ? strlen(spec) : 0;
+			bool validated = false;
+			if(spec_len > 0 && senkusha->echo_reassembly_pos >= spec_len)
+			{
+				for(size_t i = 0; i <= senkusha->echo_reassembly_pos - spec_len; i++)
+				{
+					if(memcmp(senkusha->echo_reassembly_buf + i, spec, spec_len) == 0)
+					{
+						validated = true;
+						break;
+					}
+				}
+			}
+			if(validated)
+				CHIAKI_LOGI(senkusha->log, "Senkusha BANG received: session key validated");
+			else
+				CHIAKI_LOGW(senkusha->log, "Senkusha BANG received but session key not found in response");
+			senkusha->state_finished = true;
+			chiaki_cond_signal(&senkusha->state_cond);
+		}
+		chiaki_mutex_unlock(&senkusha->state_mutex);
+		return;
+	}
+	chiaki_mutex_unlock(&senkusha->state_mutex);
+
 	if(data_type != CHIAKI_TAKION_MESSAGE_DATA_TYPE_PROTOBUF)
 		return;
 
@@ -727,17 +873,39 @@ static void senkusha_takion_av(ChiakiSenkusha *senkusha, ChiakiTakionAVPacket *p
 
 	if(senkusha->state == STATE_EXPECT_PONG)
 	{
-		if(packet->is_video
-			|| packet->frame_index != senkusha->ping_test_index
-			|| packet->unit_index != senkusha->ping_index
-			|| packet->data_size < 8)
+		bool validation_failed;
+		if(chiaki_service_type_is_cloud(senkusha->session->service_type))
+		{
+			validation_failed = packet->is_video
+				|| packet->frame_index != senkusha->ping_test_index
+				|| packet->data_size < 8;
+		}
+		else
+		{
+			validation_failed = packet->is_video
+				|| packet->frame_index != senkusha->ping_test_index
+				|| packet->unit_index != senkusha->ping_index
+				|| packet->data_size < 8;
+		}
+
+		if(validation_failed)
 		{
 			CHIAKI_LOGW(senkusha->log, "Senkusha received invalid Pong %u/%u, size: %#llx",
 					(unsigned int)packet->frame_index, (unsigned int)packet->unit_index, (unsigned long long)packet->data_size);
 			goto beach;
 		}
 
-		uint32_t tag = ntohl(*((uint32_t *)(packet->data + 4)));
+		uint32_t tag;
+		if(chiaki_service_type_is_cloud(senkusha->session->service_type))
+		{
+			if(packet->data_size < 7)
+				goto beach;
+			tag = ntohl(*((uint32_t *)(packet->data + 3)));
+		}
+		else
+		{
+			tag = ntohl(*((uint32_t *)(packet->data + 4)));
+		}
 		if(tag != senkusha->ping_tag)
 		{
 			CHIAKI_LOGW(senkusha->log, "Senkusha received Pong with invalid tag");
@@ -803,22 +971,53 @@ static ChiakiErrorCode senkusha_set_version(ChiakiSenkusha *senkusha)
 
 static ChiakiErrorCode senkusha_send_big(ChiakiSenkusha *senkusha)
 {
+	ChiakiSession *session = senkusha->session;
+
+	if(session->service_type == CHIAKI_SERVICE_TYPE_REMOTE_PLAY)
+	{
+		tkproto_TakionMessage msg;
+		memset(&msg, 0, sizeof(msg));
+
+		msg.type = tkproto_TakionMessage_PayloadType_BIG;
+		msg.has_big_payload = true;
+		msg.big_payload.client_version = 9;
+		msg.big_payload.session_key.arg = "";
+		msg.big_payload.session_key.funcs.encode = chiaki_pb_encode_string;
+		msg.big_payload.launch_spec.arg = "";
+		msg.big_payload.launch_spec.funcs.encode = chiaki_pb_encode_string;
+		msg.big_payload.encrypted_key.arg = "";
+		msg.big_payload.encrypted_key.funcs.encode = chiaki_pb_encode_string;
+
+		uint8_t buf[12];
+		pb_ostream_t stream = pb_ostream_from_buffer(buf, sizeof(buf));
+		bool pbr = pb_encode(&stream, tkproto_TakionMessage_fields, &msg);
+		if(!pbr)
+		{
+			CHIAKI_LOGE(senkusha->log, "Senkusha big protobuf encoding failed");
+			return CHIAKI_ERR_UNKNOWN;
+		}
+
+		return chiaki_takion_send_message_data(&senkusha->takion, 1, 1, buf, stream.bytes_written, NULL);
+	}
+
+	const char *launch_spec_str = (senkusha->cloud_launch_spec && senkusha->cloud_launch_spec[0] != '\0')
+		? senkusha->cloud_launch_spec
+		: "";
+
 	tkproto_TakionMessage msg;
 	memset(&msg, 0, sizeof(msg));
-
 	msg.type = tkproto_TakionMessage_PayloadType_BIG;
 	msg.has_big_payload = true;
-	msg.big_payload.client_version = 9;
-	msg.big_payload.session_key.arg = "";
+	msg.big_payload.client_version = senkusha->protocol_version;
+	msg.big_payload.session_key.arg = (void *)launch_spec_str;
 	msg.big_payload.session_key.funcs.encode = chiaki_pb_encode_string;
-	msg.big_payload.launch_spec.arg = "";
+	static const char empty_string[] = "";
+	msg.big_payload.launch_spec.arg = (void *)empty_string;
 	msg.big_payload.launch_spec.funcs.encode = chiaki_pb_encode_string;
-	msg.big_payload.encrypted_key.arg = "";
+	msg.big_payload.encrypted_key.arg = (void *)empty_string;
 	msg.big_payload.encrypted_key.funcs.encode = chiaki_pb_encode_string;
 
-	uint8_t buf[12];
-	size_t buf_size;
-
+	uint8_t buf[32768];
 	pb_ostream_t stream = pb_ostream_from_buffer(buf, sizeof(buf));
 	bool pbr = pb_encode(&stream, tkproto_TakionMessage_fields, &msg);
 	if(!pbr)
@@ -827,8 +1026,49 @@ static ChiakiErrorCode senkusha_send_big(ChiakiSenkusha *senkusha)
 		return CHIAKI_ERR_UNKNOWN;
 	}
 
-	buf_size = stream.bytes_written;
-	ChiakiErrorCode err = chiaki_takion_send_message_data(&senkusha->takion, 1, 1, buf, buf_size, NULL);
+	int32_t total_size = (int32_t)stream.bytes_written;
+	senkusha->sent_big_size = (size_t)total_size;
+	free(senkusha->echo_reassembly_buf);
+	senkusha->echo_reassembly_buf = calloc(1, senkusha->sent_big_size + 256);
+	senkusha->echo_reassembly_pos = 0;
+	senkusha->cloud_launch_spec = (char *)launch_spec_str;
+
+	uint32_t mtu = 576;
+	uint32_t net_overhead = 28;
+	uint32_t first_chunk_overhead = 30;
+	uint32_t cont_chunk_overhead = 29;
+	mtu -= net_overhead;
+
+	uint32_t buf_pos = 0;
+	bool first = true;
+	ChiakiErrorCode err = CHIAKI_ERR_SUCCESS;
+	size_t chunk_size;
+	while((mtu < (uint32_t)total_size + first_chunk_overhead) || (mtu < (uint32_t)total_size + cont_chunk_overhead && !first))
+	{
+		if(first)
+		{
+			chunk_size = mtu - first_chunk_overhead;
+			err = chiaki_takion_send_message_data(&senkusha->takion, 0, 1, buf + buf_pos, chunk_size, NULL);
+			first = false;
+		}
+		else
+		{
+			chunk_size = mtu - cont_chunk_overhead;
+			err = chiaki_takion_send_message_data_cont(&senkusha->takion, 0, 1, buf + buf_pos, chunk_size, NULL);
+		}
+		if(err != CHIAKI_ERR_SUCCESS)
+			return err;
+		buf_pos += chunk_size;
+		total_size -= (int32_t)chunk_size;
+	}
+
+	if(total_size > 0)
+	{
+		if(first)
+			err = chiaki_takion_send_message_data(&senkusha->takion, 1, 1, buf + buf_pos, (size_t)total_size, NULL);
+		else
+			err = chiaki_takion_send_message_data_cont(&senkusha->takion, 1, 1, buf + buf_pos, (size_t)total_size, NULL);
+	}
 
 	return err;
 }

@@ -22,6 +22,7 @@
 #include <sys/types.h>
 #include <assert.h>
 #include <inttypes.h>
+#include <stdio.h>
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -31,6 +32,7 @@
 #include <iphlpapi.h>
 #elif defined(__SWITCH__)
 #include <unistd.h>
+#include <sys/stat.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
@@ -51,6 +53,7 @@
 #endif
 
 #include <curl/curl.h>
+#include <curl/websockets.h>
 #if !defined(__SWITCH__) && !defined(__ANDROID__)
 #include <event2/event.h>
 #endif
@@ -77,6 +80,37 @@
 #define MILLISECONDS_US 1000L
 #define WEBSOCKET_PING_INTERVAL_SEC 5
 // Maximum WebSocket frame size currently supported by libcurl
+
+static void dump_stun_server_response(ChiakiLog *log, const char *filename, const char *data, size_t size)
+{
+    if(!data || size == 0)
+        return;
+
+    char path[128];
+#ifdef __SWITCH__
+    mkdir("sdmc:/switch/akira/logs", 0755);
+    snprintf(path, sizeof(path), "sdmc:/switch/akira/logs/%s", filename);
+#else
+    snprintf(path, sizeof(path), "%s", filename);
+#endif
+
+    FILE *file = fopen(path, "wb");
+    if(!file)
+    {
+        CHIAKI_LOGW(log, "Could not open STUN server response dump file %s", path);
+        return;
+    }
+
+    size_t written = fwrite(data, 1, size, file);
+    fclose(file);
+    if(written != size)
+    {
+        CHIAKI_LOGW(log, "Only wrote %zu of %zu bytes to STUN server response dump file %s", written, size, path);
+        return;
+    }
+
+    CHIAKI_LOGW(log, "Saved STUN server response dump to %s", path);
+}
 #define WEBSOCKET_MAX_FRAME_SIZE 64 * 1024
 #define SESSION_CREATION_TIMEOUT_SEC 30
 #define SESSION_START_TIMEOUT_SEC 30
@@ -3824,6 +3858,8 @@ static ChiakiErrorCode check_candidates(
     // Set up addresses for each candidate + extras (use sockaddr_storage and cast bc needs to be at least that big if we get ipv6)
     struct sockaddr_storage addrs[num_candidates + EXTRA_CANDIDATE_ADDRESSES];
     socklen_t lens[num_candidates + EXTRA_CANDIDATE_ADDRESSES];
+    memset(addrs, 0, sizeof(addrs));
+    memset(lens, 0, sizeof(lens));
     Candidate candidates[num_candidates + EXTRA_CANDIDATE_ADDRESSES];
     memcpy(candidates, candidates_received, num_candidates * sizeof(Candidate));
     int responses_received[num_candidates + EXTRA_CANDIDATE_ADDRESSES];
@@ -4264,6 +4300,8 @@ static ChiakiErrorCode check_candidates(
                     CHIAKI_LOGI(session->log, "check_candidates: Resending requests to all candidates TRY %d... waiting for 1st response", retry_counter);
                     for (int i=0; i < num_candidates + extra_addresses_used; i++)
                     {
+                        if(lens[i] == 0)
+                            continue;
                         if(((struct sockaddr *)&addrs[i])->sa_family == AF_INET)
                             sock = session->ipv4_sock;
                         else if(((struct sockaddr *)&addrs[i])->sa_family == AF_INET6)
@@ -4437,6 +4475,8 @@ static ChiakiErrorCode check_candidates(
             }
             free(recv_address);
         }
+        else
+            free(recv_address);
         CHIAKI_LOGV(session->log, "check_candidates: Received data from %s:%d", candidate->addr, candidate->port);
         if (response_len != sizeof(response_buf))
         {
@@ -5715,7 +5755,7 @@ static ChiakiErrorCode session_message_free(SessionMessage *message)
 static ChiakiErrorCode get_stun_servers(Session *session)
 {
     ChiakiErrorCode err = CHIAKI_ERR_SUCCESS;
-    const char STUN_HOSTS_URL[] = "https://raw.githubusercontent.com/pradt2/always-online-stun/master/valid_hosts.txt";
+    const char STUN_HOSTS_URL[] = "https://raw.githubusercontent.com/pradt2/always-online-stun/refs/heads/master/valid_ipv4s.txt";
     CURL *curl = curl_easy_init();
     if(!curl)
     {
@@ -5727,6 +5767,7 @@ static ChiakiErrorCode get_stun_servers(Session *session)
         .data = malloc(0),
         .size = 0,
     };
+    char *response_data_copy = NULL;
 
     CURLcode res = curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1L);
     if(res != CURLE_OK)
@@ -5753,14 +5794,23 @@ static ChiakiErrorCode get_stun_servers(Session *session)
             curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
             CHIAKI_LOGE(session->log, "Getting stun servers from %s failed with HTTP code %ld", STUN_HOSTS_URL, http_code);
             CHIAKI_LOGV(session->log, "Response Body: %.*s.", (int)response_data.size, response_data.data);
+            dump_stun_server_response(session->log, "stun_valid_ipv4s_error.txt", response_data.data, response_data.size);
             err = CHIAKI_ERR_HTTP_NONOK;
         } else {
             CHIAKI_LOGE(session->log, "Getting stun servers from %s failed with CURL error %s", STUN_HOSTS_URL, curl_easy_strerror(res));
+            dump_stun_server_response(session->log, "stun_valid_ipv4s_error.txt", response_data.data, response_data.size);
             err = CHIAKI_ERR_NETWORK;
         }
         goto cleanup;
     }
     // hostname has max of 253 chars + 1 char for colon : + port has max of 4 chars + 1 char for null termination
+    response_data_copy = malloc(response_data.size + 1);
+    if(!response_data_copy)
+    {
+        err = CHIAKI_ERR_MEMORY;
+        goto cleanup;
+    }
+    memcpy(response_data_copy, response_data.data, response_data.size + 1);
     char server_strings[10][259];
     char *ptr = strtok(response_data.data, "\n");
     while(ptr != NULL && session->num_stun_servers <= 9)
@@ -5777,14 +5827,17 @@ static ChiakiErrorCode get_stun_servers(Session *session)
         {
             CHIAKI_LOGW(session->log, "Problem reading stun server list host");
             session->num_stun_servers = i;
-            return CHIAKI_ERR_INVALID_DATA;
+            dump_stun_server_response(session->log, "stun_valid_ipv4s_error.txt", response_data_copy, response_data.size);
+            err = CHIAKI_ERR_INVALID_DATA;
+            goto cleanup;
         }
         session->stun_server_list[i].host = malloc((strlen(ptr) + 1) * sizeof(char));
         if(!session->stun_server_list[i].host)
         {
             CHIAKI_LOGW(session->log, "Problem allocating memory for stun server list host");
             session->num_stun_servers = i;
-            return CHIAKI_ERR_MEMORY;
+            err = CHIAKI_ERR_MEMORY;
+            goto cleanup;
         }
         strcpy(session->stun_server_list[i].host, ptr);
         ptr = strtok(NULL, ":");
@@ -5792,13 +5845,17 @@ static ChiakiErrorCode get_stun_servers(Session *session)
         {
             CHIAKI_LOGW(session->log, "Problem reading stun server list port");
             session->num_stun_servers = i;
-            return CHIAKI_ERR_INVALID_DATA;
+            dump_stun_server_response(session->log, "stun_valid_ipv4s_error.txt", response_data_copy, response_data.size);
+            err = CHIAKI_ERR_INVALID_DATA;
+            goto cleanup;
         }
         session->stun_server_list[i].port = strtol(ptr, NULL, 10);
         ptr = NULL;
     }
 
     free(response_data.data);
+    free(response_data_copy);
+    response_data_copy = NULL;
     response_data.data = malloc(0);
     response_data.size = 0;
     curl_easy_cleanup(curl);
@@ -5836,14 +5893,23 @@ static ChiakiErrorCode get_stun_servers(Session *session)
             curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
             CHIAKI_LOGE(session->log, "Getting IPV6 stun servers from %s failed with HTTP code %ld", STUN_HOSTS_URL, http_code);
             CHIAKI_LOGV(session->log, "Response Body: %.*s.", (int)response_data.size, response_data.data);
+            dump_stun_server_response(session->log, "stun_valid_ipv6s_error.txt", response_data.data, response_data.size);
             err = CHIAKI_ERR_HTTP_NONOK;
         } else {
             CHIAKI_LOGE(session->log, "Getting IPV6 stun servers from %s failed with CURL error %s", STUN_HOSTS_URL, curl_easy_strerror(res));
+            dump_stun_server_response(session->log, "stun_valid_ipv6s_error.txt", response_data.data, response_data.size);
             err = CHIAKI_ERR_NETWORK;
         }
         goto cleanup;
     }
     // ipv6 string has max of 45 chars: 39 chars + 2 chars for [] + 1 char for colon : + port has max of 4 chars + 1 char for null termination
+    response_data_copy = malloc(response_data.size + 1);
+    if(!response_data_copy)
+    {
+        err = CHIAKI_ERR_MEMORY;
+        goto cleanup;
+    }
+    memcpy(response_data_copy, response_data.data, response_data.size + 1);
     char server_strings_ipv6[10][47];
     ptr = strtok(response_data.data, "\n");
     while(ptr != NULL && session->num_stun_servers_ipv6 <= 9)
@@ -5861,14 +5927,17 @@ static ChiakiErrorCode get_stun_servers(Session *session)
         {
             CHIAKI_LOGW(session->log, "Problem reading stun server list host");
             session->num_stun_servers_ipv6 = i;
-            return CHIAKI_ERR_INVALID_DATA;
+            dump_stun_server_response(session->log, "stun_valid_ipv6s_error.txt", response_data_copy, response_data.size);
+            err = CHIAKI_ERR_INVALID_DATA;
+            goto cleanup;
         }
         session->stun_server_list_ipv6[i].host = malloc((strlen(ptr) + 1) * sizeof(char));
         if(!session->stun_server_list_ipv6[i].host)
         {
             CHIAKI_LOGW(session->log, "Problem allocating memory for stun server list host");
             session->num_stun_servers_ipv6 = i;
-            return CHIAKI_ERR_MEMORY;
+            err = CHIAKI_ERR_MEMORY;
+            goto cleanup;
         }
         strcpy(session->stun_server_list_ipv6[i].host, ptr);
         ptr = strtok(NULL, "]");
@@ -5876,7 +5945,9 @@ static ChiakiErrorCode get_stun_servers(Session *session)
         {
             CHIAKI_LOGW(session->log, "Problem reading stun server list port");
             session->num_stun_servers_ipv6 = i;
-            return CHIAKI_ERR_INVALID_DATA;
+            dump_stun_server_response(session->log, "stun_valid_ipv6s_error.txt", response_data_copy, response_data.size);
+            err = CHIAKI_ERR_INVALID_DATA;
+            goto cleanup;
         }
         // omit :
         session->stun_server_list_ipv6[i].port = strtol(ptr + 1, NULL, 10);
@@ -5884,6 +5955,7 @@ static ChiakiErrorCode get_stun_servers(Session *session)
     }
 
 cleanup:
+    free(response_data_copy);
     free(response_data.data);
     curl_easy_cleanup(curl);
     return err;

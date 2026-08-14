@@ -5,6 +5,7 @@
 #include <chiaki/random.h>
 
 #include <galois.h>
+#include <curl/curl.h>
 
 #include <errno.h>
 #include <stdlib.h>
@@ -103,6 +104,9 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_lib_init()
 	}
 #endif
 
+	if(curl_global_init(CURL_GLOBAL_DEFAULT) != 0)
+		return CHIAKI_ERR_UNKNOWN;
+
 	return CHIAKI_ERR_SUCCESS;
 }
 
@@ -118,5 +122,19 @@ CHIAKI_EXPORT const char *chiaki_codec_name(ChiakiCodec codec)
 			return "H265/HDR";
 		default:
 			return "unknown";
+	}
+}
+
+CHIAKI_EXPORT const char *chiaki_service_type_string(ChiakiServiceType service_type)
+{
+	switch(service_type)
+	{
+		case CHIAKI_SERVICE_TYPE_PSNOW:
+			return "psnow";
+		case CHIAKI_SERVICE_TYPE_PSCLOUD:
+			return "pscloud";
+		case CHIAKI_SERVICE_TYPE_REMOTE_PLAY:
+		default:
+			return "remote_play";
 	}
 }
