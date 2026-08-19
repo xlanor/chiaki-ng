@@ -11,8 +11,12 @@
 #define FEEDBACK_HISTORY_BUFFER_SIZE 0x10
 #ifdef __SWITCH__
 #define FEEDBACK_HISTORY_RESEND_EVENT_COUNT 0x10
+#define FEEDBACK_HISTORY_REPEAT_COUNT 2
+#define FEEDBACK_HISTORY_REPEAT_INTERVAL_MS 20
 #else
 #define FEEDBACK_HISTORY_RESEND_EVENT_COUNT 0x4
+#define FEEDBACK_HISTORY_REPEAT_COUNT 0
+#define FEEDBACK_HISTORY_REPEAT_INTERVAL_MS 0
 #endif
 
 static void *feedback_sender_thread_func(void *user);
@@ -35,6 +39,8 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_feedback_sender_init(ChiakiFeedbackSender *
 	feedback_sender->history_seq_num = 0;
 	feedback_sender->history_packet_begin = 0;
 	feedback_sender->history_packet_len = 0;
+	feedback_sender->history_repeats_left = 0;
+	feedback_sender->history_last_send_ms = 0;
 	feedback_sender->should_stop = false;
 	feedback_sender->controller_state_changed = false;
 	feedback_sender->history_dirty = false;
@@ -195,6 +201,15 @@ static void feedback_sender_flush_history_locked(ChiakiFeedbackSender *feedback_
 	feedback_sender->history_dirty = false;
 }
 
+static void feedback_sender_push_history_event(ChiakiFeedbackSender *feedback_sender, ChiakiFeedbackHistoryEvent *event)
+{
+	chiaki_feedback_history_buffer_push(&feedback_sender->history_buf, event);
+	feedback_sender->history_dirty = true;
+#ifdef __SWITCH__
+	feedback_sender_flush_history_locked(feedback_sender);
+#endif
+}
+
 static void feedback_sender_record_history(ChiakiFeedbackSender *feedback_sender, const ChiakiControllerState *state_prev, const ChiakiControllerState *state_now)
 {
 	for(size_t i=0; i<CHIAKI_CONTROLLER_TOUCHES_MAX; i++)
@@ -204,8 +219,7 @@ static void feedback_sender_record_history(ChiakiFeedbackSender *feedback_sender
 			ChiakiFeedbackHistoryEvent event;
 			chiaki_feedback_history_event_set_touchpad(&event, false, (uint8_t)state_prev->touches[i].id,
 					state_prev->touches[i].x, state_prev->touches[i].y);
-			chiaki_feedback_history_buffer_push(&feedback_sender->history_buf, &event);
-			feedback_sender->history_dirty = true;
+			feedback_sender_push_history_event(feedback_sender, &event);
 		}
 		else if(state_now->touches[i].id >= 0
 				&& (state_prev->touches[i].id != state_now->touches[i].id
@@ -215,8 +229,7 @@ static void feedback_sender_record_history(ChiakiFeedbackSender *feedback_sender
 			ChiakiFeedbackHistoryEvent event;
 			chiaki_feedback_history_event_set_touchpad(&event, true, (uint8_t)state_now->touches[i].id,
 					state_now->touches[i].x, state_now->touches[i].y);
-			chiaki_feedback_history_buffer_push(&feedback_sender->history_buf, &event);
-			feedback_sender->history_dirty = true;
+			feedback_sender_push_history_event(feedback_sender, &event);
 		}
 	}
 
@@ -236,8 +249,7 @@ static void feedback_sender_record_history(ChiakiFeedbackSender *feedback_sender
 				CHIAKI_LOGE(feedback_sender->log, "Feedback Sender failed to format button history event for button id %llu", (unsigned long long)button_id);
 				continue;
 			}
-			chiaki_feedback_history_buffer_push(&feedback_sender->history_buf, &event);
-			feedback_sender->history_dirty = true;
+			feedback_sender_push_history_event(feedback_sender, &event);
 		}
 	}
 
@@ -247,8 +259,7 @@ static void feedback_sender_record_history(ChiakiFeedbackSender *feedback_sender
 		ChiakiErrorCode err = chiaki_feedback_history_event_set_button(&event, CHIAKI_CONTROLLER_ANALOG_BUTTON_L2, state_now->l2_state);
 		if(err == CHIAKI_ERR_SUCCESS)
 		{
-			chiaki_feedback_history_buffer_push(&feedback_sender->history_buf, &event);
-			feedback_sender->history_dirty = true;
+			feedback_sender_push_history_event(feedback_sender, &event);
 		}
 		else
 			CHIAKI_LOGE(feedback_sender->log, "Feedback Sender failed to format button history event for L2");
@@ -260,8 +271,7 @@ static void feedback_sender_record_history(ChiakiFeedbackSender *feedback_sender
 		ChiakiErrorCode err = chiaki_feedback_history_event_set_button(&event, CHIAKI_CONTROLLER_ANALOG_BUTTON_R2, state_now->r2_state);
 		if(err == CHIAKI_ERR_SUCCESS)
 		{
-			chiaki_feedback_history_buffer_push(&feedback_sender->history_buf, &event);
-			feedback_sender->history_dirty = true;
+			feedback_sender_push_history_event(feedback_sender, &event);
 		}
 		else
 			CHIAKI_LOGE(feedback_sender->log, "Feedback Sender failed to format button history event for R2");
@@ -287,12 +297,22 @@ static void *feedback_sender_thread_func(void *user)
 	uint64_t last_feedback_state_ms = chiaki_time_now_monotonic_ms();
 	while(true)
 	{
-		if(feedback_sender->history_packet_len == 0)
+		uint64_t loop_now_ms = chiaki_time_now_monotonic_ms();
+		bool history_repeat_due = feedback_sender->history_repeats_left > 0
+			&& loop_now_ms - feedback_sender->history_last_send_ms >= FEEDBACK_HISTORY_REPEAT_INTERVAL_MS;
+
+		if(feedback_sender->history_packet_len == 0 && !history_repeat_due)
 		{
-			uint64_t now_ms = chiaki_time_now_monotonic_ms();
 			uint64_t next_timeout = FEEDBACK_STATE_TIMEOUT_MAX_MS;
-			if(now_ms - last_feedback_state_ms < FEEDBACK_STATE_TIMEOUT_MAX_MS)
-				next_timeout = FEEDBACK_STATE_TIMEOUT_MAX_MS - (now_ms - last_feedback_state_ms);
+			if(loop_now_ms - last_feedback_state_ms < FEEDBACK_STATE_TIMEOUT_MAX_MS)
+				next_timeout = FEEDBACK_STATE_TIMEOUT_MAX_MS - (loop_now_ms - last_feedback_state_ms);
+			if(feedback_sender->history_repeats_left > 0)
+			{
+				uint64_t until_repeat = FEEDBACK_HISTORY_REPEAT_INTERVAL_MS
+					- (loop_now_ms - feedback_sender->history_last_send_ms);
+				if(until_repeat < next_timeout)
+					next_timeout = until_repeat;
+			}
 
 			err = chiaki_cond_timedwait_pred(&feedback_sender->state_cond, &feedback_sender->state_mutex, next_timeout, state_cond_check, feedback_sender);
 			if(err != CHIAKI_ERR_SUCCESS && err != CHIAKI_ERR_TIMEOUT)
@@ -333,7 +353,25 @@ static void *feedback_sender_thread_func(void *user)
 				% CHIAKI_FEEDBACK_HISTORY_PACKET_QUEUE_SIZE;
 			feedback_sender->history_packet_len--;
 			send_feedback_history = true;
+			feedback_sender->history_repeats_left = FEEDBACK_HISTORY_REPEAT_COUNT;
 		}
+		else if(feedback_sender->history_repeats_left > 0
+			&& now_ms - feedback_sender->history_last_send_ms >= FEEDBACK_HISTORY_REPEAT_INTERVAL_MS)
+		{
+			feedback_sender->history_repeats_left--;
+			if(feedback_sender->history_buf.len > 0)
+			{
+				history_buf_size = CHIAKI_FEEDBACK_HISTORY_PACKET_BUF_SIZE;
+				if(chiaki_feedback_history_buffer_format(&feedback_sender->history_buf, history_buf, &history_buf_size) == CHIAKI_ERR_SUCCESS)
+					send_feedback_history = true;
+				else
+					history_buf_size = 0;
+			}
+		}
+
+		if(send_feedback_history)
+			feedback_sender->history_last_send_ms = now_ms;
+
 		chiaki_mutex_unlock(&feedback_sender->state_mutex);
 
 		if(send_feedback_state)
