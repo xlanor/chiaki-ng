@@ -29,6 +29,8 @@ typedef struct chiaki_feedback_sender_t
 	size_t history_packet_sizes[CHIAKI_FEEDBACK_HISTORY_PACKET_QUEUE_SIZE];
 	size_t history_packet_begin;
 	size_t history_packet_len;
+	size_t history_repeats_left;
+	uint64_t history_last_send_ms;
 
 	bool should_stop;
 	ChiakiControllerState controller_state_prev;
