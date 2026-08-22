@@ -122,7 +122,18 @@ if(CHIAKI_LIB_ENABLE_LIBNX_CRYPTO)
 		src/crypto/libnx/aes_cfb.c
 		src/crypto/libnx/aes_cfb.h
 		src/crypto/libnx/gmac.c
-		src/crypto/libnx/gmac.h)
+		src/crypto/libnx/gmac.h
+		src/crypto/libnx/aia.c
+		src/crypto/libnx/aia.h)
+
+	file(GLOB BEARSSL_SOURCES
+		src/crypto/bearssl/src/*.c
+		src/crypto/bearssl/src/x509/*.c
+		src/crypto/bearssl/src/rsa/*.c
+		src/crypto/bearssl/src/hash/*.c
+		src/crypto/bearssl/src/int/*.c
+		src/crypto/bearssl/src/codec/*.c)
+	list(APPEND SOURCE_FILES ${BEARSSL_SOURCES})
 
 	option(CHIAKI_LIB_ENABLE_LIBNX_EXPERIMENTAL "Enable experimental PMULL GHASH (requires ARMv8+crypto)" OFF)
 	if(CHIAKI_LIB_ENABLE_LIBNX_EXPERIMENTAL)
@@ -168,6 +179,11 @@ endif()
 
 target_include_directories(chiaki-lib PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_include_directories(chiaki-lib PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/cloud")
+if(CHIAKI_LIB_ENABLE_LIBNX_CRYPTO)
+	target_include_directories(chiaki-lib PRIVATE
+		"${CMAKE_CURRENT_SOURCE_DIR}/src/crypto/bearssl/inc"
+		"${CMAKE_CURRENT_SOURCE_DIR}/src/crypto/bearssl/src")
+endif()
 
 find_package(Threads REQUIRED)
 target_link_libraries(chiaki-lib Threads::Threads)
