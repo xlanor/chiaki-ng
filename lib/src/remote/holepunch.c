@@ -387,6 +387,7 @@ typedef struct session_t
     CURLSH* curl_share;
 
     char* ws_fqdn;
+    char* ws_fqdn_override;
     ChiakiThread ws_thread;
     NotificationQueue* ws_notification_queue;
     bool ws_thread_should_stop;
@@ -782,6 +783,7 @@ CHIAKI_EXPORT Session* chiaki_holepunch_session_init(
     session->log = log;
 
     session->ws_fqdn = NULL;
+    session->ws_fqdn_override = NULL;
     session->ws_notification_queue = createNq();
     if(!session->ws_notification_queue)
     {
@@ -934,9 +936,22 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_holepunch_upnp_discover(Session *session)
 
 CHIAKI_EXPORT ChiakiErrorCode chiaki_holepunch_session_create(Session* session)
 {
-    ChiakiErrorCode err = get_websocket_fqdn(session, &session->ws_fqdn);
-    if (err != CHIAKI_ERR_SUCCESS)
-        return err;
+    ChiakiErrorCode err = CHIAKI_ERR_SUCCESS;
+    if(session->ws_fqdn_override)
+    {
+        if(session->ws_fqdn)
+            free(session->ws_fqdn);
+        session->ws_fqdn = strdup(session->ws_fqdn_override);
+        if(!session->ws_fqdn)
+            return CHIAKI_ERR_MEMORY;
+        CHIAKI_LOGW(session->log, "chiaki_holepunch_session_create: using overridden websocket FQDN %s", session->ws_fqdn);
+    }
+    else
+    {
+        err = get_websocket_fqdn(session, &session->ws_fqdn);
+        if (err != CHIAKI_ERR_SUCCESS)
+            return err;
+    }
     chiaki_mutex_lock(&session->stop_mutex);
     if(session->main_should_stop)
     {
@@ -1786,6 +1801,17 @@ CHIAKI_EXPORT void chiaki_holepunch_session_force_port_guessing(Session *session
     session->force_port_guessing = enabled;
 }
 
+CHIAKI_EXPORT void chiaki_holepunch_session_set_ws_fqdn_override(Session *session, const char *fqdn)
+{
+    if(session->ws_fqdn_override)
+    {
+        free(session->ws_fqdn_override);
+        session->ws_fqdn_override = NULL;
+    }
+    if(fqdn && *fqdn)
+        session->ws_fqdn_override = strdup(fqdn);
+}
+
 CHIAKI_EXPORT void chiaki_holepunch_session_set_port_guessing_ports(Session* session, int count)
 {
     if(count > 0)
@@ -1880,6 +1906,8 @@ CHIAKI_EXPORT void chiaki_holepunch_session_fini(Session* session)
         curl_share_cleanup(session->curl_share);
     if (session->ws_fqdn)
         free(session->ws_fqdn);
+    if (session->ws_fqdn_override)
+        free(session->ws_fqdn_override);
     if (session->ws_notification_queue)
     {
         chiaki_mutex_lock(&session->notif_mutex);
