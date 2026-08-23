@@ -17,7 +17,8 @@ set(CHIAKI_UNIT_SOURCES
 				bitstream.c
 				regist.c
 				cloudcatalog_merge.c
-				cloudsession_kamaji.c)
+				cloudsession_kamaji.c
+				aia.c)
 
 if(CHIAKI_ENABLE_FFMPEG_DECODER)
 	list(APPEND CHIAKI_UNIT_SOURCES ffmpegdecoder.c)

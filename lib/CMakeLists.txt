@@ -101,6 +101,8 @@ set(SOURCE_FILES
 		src/cloud/cloudsession_ping.c
 		src/cloud/cloudsession_gaikai.c
 		src/cloud/cloudsession_kamaji.c
+		src/aia.c
+		src/aia.h
 		src/remote/holepunch.c
 		src/remote/rudp.c
 		src/remote/rudpsendbuffer.c)
