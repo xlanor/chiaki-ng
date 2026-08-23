@@ -87,6 +87,7 @@ set(SOURCE_FILES
 		src/bitstream.c
 		src/aia.c
 		src/aia.h
+		src/aia_openssl.c
 		src/remote/holepunch.c
 		src/remote/rudp.c
 		src/remote/rudpsendbuffer.c)
