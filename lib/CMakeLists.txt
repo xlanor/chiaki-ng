@@ -132,6 +132,8 @@ if(CHIAKI_LIB_ENABLE_LIBNX_CRYPTO)
 			src/crypto/libnx/ghash_pmull.c
 			src/crypto/libnx/ghash_pmull.h)
 	endif()
+else()
+	list(APPEND SOURCE_FILES src/aia_openssl.c)
 endif()
 
 if(CHIAKI_ENABLE_PI_DECODER)
