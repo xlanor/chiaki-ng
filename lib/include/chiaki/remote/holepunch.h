@@ -205,6 +205,18 @@ CHIAKI_EXPORT ChiakiHolepunchSession chiaki_holepunch_session_init(
 CHIAKI_EXPORT void chiaki_holepunch_session_force_port_guessing(
     ChiakiHolepunchSession session, bool enabled);
 
+/**
+ * Pins the push-notification websocket to a specific PSN node instead of the one
+ * handed out by the /np/serveraddr endpoint. Intended for testing certificate
+ * chain handling against a known node; pass NULL or an empty string to restore
+ * the normal behaviour.
+ *
+ * @param[in] session Handle to the holepunching session
+ * @param[in] fqdn Fully qualified domain name of the node to use, or NULL
+ */
+CHIAKI_EXPORT void chiaki_holepunch_session_set_ws_fqdn_override(
+    ChiakiHolepunchSession session, const char *fqdn);
+
     /**
  *
  * Sets the number of ports to use for port guessing NAT traversal.
