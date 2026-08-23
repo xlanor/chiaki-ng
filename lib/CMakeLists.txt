@@ -124,7 +124,11 @@ if(CHIAKI_LIB_ENABLE_LIBNX_CRYPTO)
 		src/crypto/libnx/aes_cfb.c
 		src/crypto/libnx/aes_cfb.h
 		src/crypto/libnx/gmac.c
-		src/crypto/libnx/gmac.h)
+		src/crypto/libnx/gmac.h
+		src/crypto/libnx/aia_mbedtls.c
+		src/crypto/libnx/store_parse.c
+		src/crypto/libnx/store_parse.h)
+
 
 	option(CHIAKI_LIB_ENABLE_LIBNX_EXPERIMENTAL "Enable experimental PMULL GHASH (requires ARMv8+crypto)" OFF)
 	if(CHIAKI_LIB_ENABLE_LIBNX_EXPERIMENTAL)
@@ -228,6 +232,7 @@ if(CHIAKI_LIB_ENABLE_LIBNX_CRYPTO)
 			PROPERTIES COMPILE_FLAGS "-march=armv8-a+crypto"
 		)
 	endif()
+	target_link_libraries(chiaki-lib mbedtls mbedx509 mbedcrypto)
 elseif(CHIAKI_LIB_OPENSSL_EXTERNAL_PROJECT)
 	target_link_libraries(chiaki-lib OpenSSL_Crypto)
 else()
