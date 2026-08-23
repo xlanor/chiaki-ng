@@ -15,6 +15,7 @@ extern MunitTest tests_regist[];
 extern MunitTest tests_bitstream[];
 extern MunitTest tests_cloudcatalog_merge[];
 extern MunitTest tests_cloudsession_kamaji[];
+extern MunitTest tests_aia[];
 #if CHIAKI_LIB_ENABLE_FFMPEG_DECODER
 extern MunitTest tests_ffmpegdecoder[];
 #endif
@@ -100,6 +101,13 @@ static MunitSuite suites[] = {
 	{
 		"/cloudsession_kamaji",
 		tests_cloudsession_kamaji,
+		NULL,
+		1,
+		MUNIT_SUITE_OPTION_NONE
+	},
+	{
+		"/aia",
+		tests_aia,
 		NULL,
 		1,
 		MUNIT_SUITE_OPTION_NONE
