@@ -305,6 +305,11 @@ static CCNativeResult psnow_stores(ChiakiLog *log, const char *jsession,
 		if(obj)
 			json_object_put(obj);
 	}
+	if(result != CC_NATIVE_OK)
+		CHIAKI_LOGW(log, "[PSNOW] /user/stores HTTP %ld -> %s; body: %.300s",
+			resp.status_code,
+			result == CC_NATIVE_REGION_UNSUPPORTED ? "region unsupported" : "fatal",
+			resp.data ? resp.data : "(empty)");
 	cc_http_response_fini(&resp);
 	return result;
 }
