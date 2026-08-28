@@ -141,6 +141,8 @@ typedef struct takion_message_payload_init_t
 #define TAKION_COOKIE_SIZE 0x20
 #define TAKION_PSN_WRAPPER_SIZE 4
 
+#define TAKION_MSG_SIZE_ERRORS_MAX 32
+
 static size_t takion_add_cloud_wrapper(uint8_t *buf, size_t size, uint8_t psn_wrapper_type)
 {
 	memmove(buf + TAKION_PSN_WRAPPER_SIZE, buf, size);
@@ -1145,6 +1147,7 @@ static void *takion_thread_func(void *user)
 	}
 
 	bool crypt_available = takion->gkcrypt_remote ? true : false;
+	unsigned int msg_size_errors = 0;
 
 	while(true)
 	{
@@ -1204,11 +1207,19 @@ static void *takion_thread_func(void *user)
 			free(buf);
 			if(err == CHIAKI_ERR_TIMEOUT)
 			{
+				msg_size_errors = 0;
 				takion_av_queues_flush_with_timeout(takion);
+				continue;
+			}
+			if(err == CHIAKI_ERR_BUF_TOO_SMALL && ++msg_size_errors <= TAKION_MSG_SIZE_ERRORS_MAX)
+			{
+				CHIAKI_LOGW(takion->log, "Takion datagram size error %u/%u, keeping session alive",
+					msg_size_errors, (unsigned int)TAKION_MSG_SIZE_ERRORS_MAX);
 				continue;
 			}
 			break;
 		}
+		msg_size_errors = 0;
 		uint8_t *resized_buf = realloc(buf, received_size);
 		if(!resized_buf)
 		{
@@ -1247,6 +1258,15 @@ beach:
 	return NULL;
 }
 
+static bool takion_socket_error_is_msg_size(void)
+{
+#ifdef _WIN32
+	return WSAGetLastError() == WSAEMSGSIZE;
+#else
+	return errno == EMSGSIZE;
+#endif
+}
+
 static ChiakiErrorCode takion_recv(ChiakiTakion *takion, uint8_t *buf, size_t *buf_size, uint64_t timeout_ms)
 {
 	ChiakiErrorCode err = chiaki_stop_pipe_select_single(&takion->stop_pipe, takion->sock, false, timeout_ms);
@@ -1262,7 +1282,12 @@ static ChiakiErrorCode takion_recv(ChiakiTakion *takion, uint8_t *buf, size_t *b
 	if(received_sz <= 0)
 	{
 		if(received_sz < 0)
+		{
+			bool msg_size = takion_socket_error_is_msg_size();
 			CHIAKI_LOGE(takion->log, "Takion recv failed: " CHIAKI_SOCKET_ERROR_FMT, CHIAKI_SOCKET_ERROR_VALUE);
+			if(msg_size)
+				return CHIAKI_ERR_BUF_TOO_SMALL;
+		}
 		else
 			CHIAKI_LOGE(takion->log, "Takion recv returned 0");
 		return CHIAKI_ERR_NETWORK;
