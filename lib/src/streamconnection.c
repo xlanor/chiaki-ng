@@ -453,6 +453,20 @@ static void stream_connection_takion_cb(ChiakiTakionEvent *event, void *user)
 
 static void stream_connection_takion_data(ChiakiStreamConnection *stream_connection, ChiakiTakionMessageDataType data_type, uint8_t *buf, size_t buf_size)
 {
+	size_t prefix = chiaki_akira_takion_data_message_prefix(stream_connection->takion.version,
+			(uint8_t)data_type);
+	if(prefix)
+	{
+		if(buf_size <= prefix)
+		{
+			CHIAKI_LOGE(stream_connection->log, "StreamConnection got data type %#x with size %#llx <= extended header",
+					data_type, (unsigned long long)buf_size);
+			return;
+		}
+		buf += prefix;
+		buf_size -= prefix;
+	}
+
 	switch(data_type)
 	{
 		case CHIAKI_TAKION_MESSAGE_DATA_TYPE_PROTOBUF:

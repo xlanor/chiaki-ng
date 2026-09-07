@@ -93,6 +93,16 @@ CHIAKI_EXPORT size_t chiaki_akira_takion_ext_header_size(unsigned int version, u
  * Write the 8 header bytes at buf: big-endian timestamp then big-endian counter,
  * matching the order the daemon's encoder emits them in.
  */
+/**
+ * Bytes of extended header the daemon splices into a data message body, between
+ * the 1-byte data type and the first field. The fixed-layout binary messages
+ * (5, 7 rumble, 9 pad info, 11 trigger effects, 12, 13) each grow by exactly 8
+ * at v20 - 26 to 34 for trigger effects, 4 to 12 for rumble - while the
+ * variable-length protobuf-carrying types 4 and 10 are left alone, which is why
+ * a v20 session still negotiates and streams.
+ */
+CHIAKI_EXPORT size_t chiaki_akira_takion_data_message_prefix(unsigned int version, uint8_t data_type);
+
 CHIAKI_EXPORT void chiaki_akira_takion_ext_header_write(uint8_t *buf, uint32_t timestamp, uint32_t counter);
 
 /**

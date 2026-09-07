@@ -41,6 +41,24 @@ CHIAKI_EXPORT size_t chiaki_akira_takion_ext_header_size(unsigned int version, u
 	return CHIAKI_AKIRA_TAKION_EXT_HEADER_SIZE;
 }
 
+CHIAKI_EXPORT size_t chiaki_akira_takion_data_message_prefix(unsigned int version, uint8_t data_type)
+{
+	if(!chiaki_akira_takion_feature_supported(CHIAKI_AKIRA_TAKION_FEATURE_EXTENDED_HEADER, version))
+		return 0;
+	switch(data_type)
+	{
+		case 5:
+		case 7:
+		case 9:
+		case 11:
+		case 12:
+		case 13:
+			return CHIAKI_AKIRA_TAKION_EXT_HEADER_SIZE;
+		default:
+			return 0;
+	}
+}
+
 CHIAKI_EXPORT void chiaki_akira_takion_ext_header_write(uint8_t *buf, uint32_t timestamp, uint32_t counter)
 {
 	buf[0] = (uint8_t)(timestamp >> 24);
