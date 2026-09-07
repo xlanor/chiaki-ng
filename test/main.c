@@ -10,6 +10,8 @@ extern MunitTest tests_http[];
 extern MunitTest tests_rpcrypt[];
 extern MunitTest tests_gkcrypt[];
 extern MunitTest tests_takion[];
+extern MunitTest tests_akira_takion_profile[];
+extern MunitTest tests_akira_ecdh_p521[];
 extern MunitTest tests_fec[];
 extern MunitTest tests_regist[];
 extern MunitTest tests_bitstream[];
@@ -66,6 +68,20 @@ static MunitSuite suites[] = {
 	{
 		"/takion",
 		tests_takion,
+		NULL,
+		1,
+		MUNIT_SUITE_OPTION_NONE
+	},
+	{
+		"/akira_takion_profile",
+		tests_akira_takion_profile,
+		NULL,
+		1,
+		MUNIT_SUITE_OPTION_NONE
+	},
+	{
+		"/akira_ecdh_p521",
+		tests_akira_ecdh_p521,
 		NULL,
 		1,
 		MUNIT_SUITE_OPTION_NONE

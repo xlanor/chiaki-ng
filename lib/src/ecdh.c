@@ -6,6 +6,7 @@
 
 #ifdef CHIAKI_LIB_ENABLE_LIBNX_CRYPTO
 #include "crypto/libnx/microecc/uECC.h"
+#include "crypto/libnx/microecc/uECC_p521.h"
 #include <switch/crypto/hmac.h>
 #include <switch/services/csrng.h>
 #else
@@ -30,18 +31,59 @@ static int libnx_rng(uint8_t *dest, unsigned size)
 }
 #endif
 
-CHIAKI_EXPORT ChiakiErrorCode chiaki_ecdh_init(ChiakiECDH *ecdh)
+CHIAKI_EXPORT size_t chiaki_ecdh_secret_size(const ChiakiECDH *ecdh)
+{
+	return ecdh->curve == CHIAKI_ECDH_CURVE_SECP521R1
+		? CHIAKI_UECC_PRIVATE_KEY_SIZE_P521
+		: CHIAKI_ECDH_SECRET_SIZE;
+}
+
+static size_t ecdh_public_key_size(const ChiakiECDH *ecdh)
+{
+	return ecdh->curve == CHIAKI_ECDH_CURVE_SECP521R1
+		? CHIAKI_UECC_PUBLIC_KEY_SIZE_P521
+		: CHIAKI_UECC_PUBLIC_KEY_SIZE;
+}
+
+#ifdef CHIAKI_LIB_ENABLE_LIBNX_CRYPTO
+static bool ecdh_is_p521(const ChiakiECDH *ecdh)
+{
+	return ecdh->curve == CHIAKI_ECDH_CURVE_SECP521R1;
+}
+
+static int ecdh_uecc_make_key(const ChiakiECDH *ecdh, uint8_t *public_key, uint8_t *private_key)
+{
+	if(ecdh_is_p521(ecdh))
+		return uECC_p521_make_key(public_key, private_key, uECC_p521_secp521r1());
+	return uECC_make_key(public_key, private_key, uECC_secp256k1());
+}
+
+static int ecdh_uecc_shared_secret(const ChiakiECDH *ecdh, const uint8_t *public_key, const uint8_t *private_key, uint8_t *secret)
+{
+	if(ecdh_is_p521(ecdh))
+		return uECC_p521_shared_secret(public_key, private_key, secret, uECC_p521_secp521r1());
+	return uECC_shared_secret(public_key, private_key, secret, uECC_secp256k1());
+}
+#else
+static int ecdh_nid(const ChiakiECDH *ecdh)
+{
+	return ecdh->curve == CHIAKI_ECDH_CURVE_SECP521R1 ? NID_secp521r1 : NID_secp256k1;
+}
+#endif
+
+CHIAKI_EXPORT ChiakiErrorCode chiaki_ecdh_init(ChiakiECDH *ecdh, ChiakiECDHCurve curve)
 {
 	memset(ecdh, 0, sizeof(ChiakiECDH));
+	ecdh->curve = curve;
 #ifdef CHIAKI_LIB_ENABLE_LIBNX_CRYPTO
 	/* Initialize csrng service */
 	csrngInitialize();
 
 	/* Set RNG for micro-ecc */
 	uECC_set_rng(libnx_rng);
+	uECC_p521_set_rng(libnx_rng);
 
-	/* Generate keypair on secp256k1 */
-	if (!uECC_make_key(ecdh->public_key, ecdh->private_key, uECC_secp256k1()))
+	if (!ecdh_uecc_make_key(ecdh, ecdh->public_key, ecdh->private_key))
 	{
 		csrngExit();
 		return CHIAKI_ERR_UNKNOWN;
@@ -49,7 +91,7 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_ecdh_init(ChiakiECDH *ecdh)
 
 #else
 #define CHECK(a) if(!(a)) { chiaki_ecdh_fini(ecdh); return CHIAKI_ERR_UNKNOWN; }
-	CHECK(ecdh->group = EC_GROUP_new_by_curve_name(NID_secp256k1));
+	CHECK(ecdh->group = EC_GROUP_new_by_curve_name(ecdh_nid(ecdh)));
 
 	CHECK(ecdh->key_local = EC_KEY_new());
 	CHECK(EC_KEY_set_group(ecdh->key_local, ecdh->group));
@@ -77,20 +119,20 @@ CHIAKI_EXPORT void chiaki_ecdh_fini(ChiakiECDH *ecdh)
 CHIAKI_EXPORT ChiakiErrorCode chiaki_ecdh_set_local_key(ChiakiECDH *ecdh, const uint8_t *private_key, size_t private_key_size, const uint8_t *public_key, size_t public_key_size)
 {
 #ifdef CHIAKI_LIB_ENABLE_LIBNX_CRYPTO
-	/* Copy private key (32 bytes) */
-	if (private_key_size != CHIAKI_UECC_PRIVATE_KEY_SIZE)
-		return CHIAKI_ERR_UNKNOWN;
-	memcpy(ecdh->private_key, private_key, CHIAKI_UECC_PRIVATE_KEY_SIZE);
+	size_t priv_size = chiaki_ecdh_secret_size(ecdh);
+	size_t pub_size = ecdh_public_key_size(ecdh);
 
-	/* Handle public key - may have 0x04 prefix (65 bytes) or be raw (64 bytes) */
-	if (public_key_size == 65 && public_key[0] == 0x04)
+	if (private_key_size != priv_size)
+		return CHIAKI_ERR_UNKNOWN;
+	memcpy(ecdh->private_key, private_key, priv_size);
+
+	if (public_key_size == pub_size + 1 && public_key[0] == 0x04)
 	{
-		/* Skip 0x04 uncompressed point prefix */
-		memcpy(ecdh->public_key, public_key + 1, CHIAKI_UECC_PUBLIC_KEY_SIZE);
+		memcpy(ecdh->public_key, public_key + 1, pub_size);
 	}
-	else if (public_key_size == CHIAKI_UECC_PUBLIC_KEY_SIZE)
+	else if (public_key_size == pub_size)
 	{
-		memcpy(ecdh->public_key, public_key, CHIAKI_UECC_PUBLIC_KEY_SIZE);
+		memcpy(ecdh->public_key, public_key, pub_size);
 	}
 	else
 	{
@@ -142,9 +184,10 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_ecdh_get_local_pub_key(ChiakiECDH *ecdh, ui
 {
 #ifdef CHIAKI_LIB_ENABLE_LIBNX_CRYPTO
 	/* Export public key in uncompressed format: 0x04 || X || Y */
+	size_t pub_size = ecdh_public_key_size(ecdh);
 	key_out[0] = 0x04;
-	memcpy(key_out + 1, ecdh->public_key, CHIAKI_UECC_PUBLIC_KEY_SIZE);
-	*key_out_size = 1 + CHIAKI_UECC_PUBLIC_KEY_SIZE;  /* 65 bytes */
+	memcpy(key_out + 1, ecdh->public_key, pub_size);
+	*key_out_size = 1 + pub_size;
 
 	/* Compute HMAC-SHA256 signature of the public key */
 	hmacSha256CalculateMac(sig_out, handshake_key, CHIAKI_HANDSHAKE_KEY_SIZE, key_out, *key_out_size);
@@ -172,15 +215,15 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_ecdh_derive_secret(ChiakiECDH *ecdh, uint8_
 	//compute DH shared key
 #ifdef CHIAKI_LIB_ENABLE_LIBNX_CRYPTO
 	const uint8_t *remote_pub;
-	uint8_t remote_pub_buf[CHIAKI_UECC_PUBLIC_KEY_SIZE];
+	size_t pub_size = ecdh_public_key_size(ecdh);
 
 	/* Handle remote public key format */
-	if (remote_key_size == 65 && remote_key[0] == 0x04)
+	if (remote_key_size == pub_size + 1 && remote_key[0] == 0x04)
 	{
 		/* Skip 0x04 uncompressed point prefix */
 		remote_pub = remote_key + 1;
 	}
-	else if (remote_key_size == CHIAKI_UECC_PUBLIC_KEY_SIZE)
+	else if (remote_key_size == pub_size)
 	{
 		remote_pub = remote_key;
 	}
@@ -190,7 +233,7 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_ecdh_derive_secret(ChiakiECDH *ecdh, uint8_
 	}
 
 	/* Compute ECDH shared secret */
-	if (!uECC_shared_secret(remote_pub, ecdh->private_key, secret_out, uECC_secp256k1()))
+	if (!ecdh_uecc_shared_secret(ecdh, remote_pub, ecdh->private_key, secret_out))
 	{
 		return CHIAKI_ERR_UNKNOWN;
 	}
@@ -212,11 +255,12 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_ecdh_derive_secret(ChiakiECDH *ecdh, uint8_
 		return CHIAKI_ERR_UNKNOWN;
 	}
 
-	int r = ECDH_compute_key(secret_out, CHIAKI_ECDH_SECRET_SIZE, remote_public_key, ecdh->key_local, NULL);
+	size_t secret_size = chiaki_ecdh_secret_size(ecdh);
+	int r = ECDH_compute_key(secret_out, secret_size, remote_public_key, ecdh->key_local, NULL);
 
 	EC_POINT_free(remote_public_key);
 
-	if(r != CHIAKI_ECDH_SECRET_SIZE)
+	if(r != (int)secret_size)
 		return CHIAKI_ERR_UNKNOWN;
 
 	return CHIAKI_ERR_SUCCESS;

@@ -17,6 +17,7 @@
 #include <pb.h>
 #include <chiaki/takion.h>
 #include <chiaki/gkcrypt.h>
+#include <chiaki/akira/takion_profile.h>
 
 #ifndef _WIN32
 #include <sys/types.h>
@@ -809,6 +810,11 @@ static void senkusha_takion_data(ChiakiSenkusha *senkusha, ChiakiTakionMessageDa
 		}
 		else
 		{
+			if(msg.takion_protocol_request_ack.has_takion_protocol_version)
+				CHIAKI_LOGI(senkusha->log, "Senkusha console picked takion version %u",
+						(unsigned int)msg.takion_protocol_request_ack.takion_protocol_version);
+			else
+				CHIAKI_LOGW(senkusha->log, "Senkusha protocol ack carried no version");
 			senkusha->state_finished = true;
 			chiaki_cond_signal(&senkusha->state_cond);
 		}
@@ -947,14 +953,17 @@ static ChiakiErrorCode senkusha_set_version(ChiakiSenkusha *senkusha)
 	tkproto_TakionMessage msg;
 	memset(&msg, 0, sizeof(msg));
 	List versions;
-	versions.items[0] = 9;
-	versions.num_items = 1;
+	versions.items[0] = 12;
+	versions.items[1] = 15;
+	versions.items[2] = 18;
+	versions.items[3] = CHIAKI_AKIRA_TAKION_VERSION_MAX;
+	versions.num_items = 4;
 	msg.type = tkproto_TakionMessage_PayloadType_TAKIONPROTOCOLREQUEST;
 	msg.has_takion_protocol_request = true;
 	msg.takion_protocol_request.supported_takion_versions.arg = &versions;
 	msg.takion_protocol_request.supported_takion_versions.funcs.encode = chiaki_pb_encode_list;
 
-	uint8_t buf[12];
+	uint8_t buf[24];
 	size_t buf_size;
 
 	pb_ostream_t stream = pb_ostream_from_buffer(buf, sizeof(buf));

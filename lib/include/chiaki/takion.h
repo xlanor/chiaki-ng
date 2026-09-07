@@ -38,6 +38,8 @@ typedef struct chiaki_takion_av_packet_t
 	bool uses_nalu_info_structs;
 	bool is_video;
 	bool is_haptics;
+	bool av_tag_valid;
+	uint8_t av_tag;
 	ChiakiSeqNum16 unit_index;
 	uint16_t units_in_frame_total; // source + units_in_frame_fec
 	uint16_t units_in_frame_fec;
@@ -131,6 +133,13 @@ typedef struct chiaki_takion_t
 	uint8_t psn_wrapper_type;
 	bool is_ping_handshake;
 
+	/**
+	 * State behind the v20 extended header: the epoch its 32-bit timestamp counts
+	 * from, and the counter it carries, incremented once per packet that has one.
+	 */
+	uint64_t ext_header_epoch_us;
+	uint32_t ext_header_counter;
+
 	// Whether or not audio or video is disabled from further processing beyond basic ack
 	ChiakiDisableAudioVideo disable_audio_video;
 	/**
@@ -154,6 +163,7 @@ typedef struct chiaki_takion_t
 
 	ChiakiGKCrypt *gkcrypt_local; // if NULL (default), no gmac is calculated and nothing is encrypted
 	uint64_t key_pos_local;
+	unsigned int audio_header_dumps;
 	ChiakiMutex gkcrypt_local_mutex;
 
 	ChiakiGKCrypt *gkcrypt_remote; // if NULL (default), remote gmacs are IGNORED (!) and everything is expected to be unencrypted
@@ -202,7 +212,7 @@ static inline void chiaki_takion_set_crypt(ChiakiTakion *takion, ChiakiGKCrypt *
 	takion->gkcrypt_remote = gkcrypt_remote;
 }
 
-CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_packet_mac(ChiakiGKCrypt *crypt, uint8_t *buf, size_t buf_size, uint64_t key_pos, uint8_t *mac_out, uint8_t *mac_old_out, bool has_psn_wrapper);
+CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_packet_mac(ChiakiGKCrypt *crypt, uint8_t *buf, size_t buf_size, uint64_t key_pos, uint8_t *mac_out, uint8_t *mac_old_out, bool has_psn_wrapper, unsigned int version);
 
 /**
  * Get a new key pos and advance by data_size.
@@ -267,6 +277,9 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_v9_av_packet_parse(ChiakiTakionAVPac
 
 CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_v12_av_packet_parse(ChiakiTakionAVPacket *packet, ChiakiKeyState *key_state, uint8_t *buf, size_t buf_size);
 
+CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_v15_av_packet_parse(ChiakiTakionAVPacket *packet, ChiakiKeyState *key_state, uint8_t *buf, size_t buf_size);
+CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_v20_av_packet_parse(ChiakiTakionAVPacket *packet, ChiakiKeyState *key_state, uint8_t *buf, size_t buf_size);
+
 #define CHIAKI_TAKION_V7_AV_HEADER_SIZE_BASE					0x12
 #define CHIAKI_TAKION_V7_AV_HEADER_SIZE_VIDEO_ADD				0x3
 #define CHIAKI_TAKION_V7_AV_HEADER_SIZE_NALU_INFO_STRUCTS_ADD	0x3
@@ -274,6 +287,13 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_v12_av_packet_parse(ChiakiTakionAVPa
 CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_v7_av_packet_format_header(uint8_t *buf, size_t buf_size, size_t *header_size_out, ChiakiTakionAVPacket *packet);
 
 CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_v7_av_packet_parse(ChiakiTakionAVPacket *packet, ChiakiKeyState *key_state, uint8_t *buf, size_t buf_size);
+
+/**
+ * Select the AV packet parser for a protocol version, or NULL when this client
+ * cannot parse that version's AV layout. Keyed on protocol capability rather than
+ * on an exact version number, so versions between the ones named above resolve.
+ */
+CHIAKI_EXPORT ChiakiTakionAVPacketParse chiaki_takion_av_packet_parse_for_version(unsigned int version);
 
 #define CHIAKI_TAKION_CONGESTION_PACKET_SIZE 0xf
 

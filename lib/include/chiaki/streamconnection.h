@@ -42,6 +42,8 @@ typedef struct chiaki_stream_connection_t
 	ChiakiAudioReceiver *audio_receiver;
 	ChiakiVideoReceiver *video_receiver;
 	ChiakiAudioReceiver *haptics_receiver;
+	uint64_t av_tag_census[32];
+	uint64_t av_tag_census_total;
 	double packet_loss_max;
 	uint8_t motion_counter[4];
 	uint8_t led_state[3];

@@ -3,6 +3,7 @@
 #include <munit.h>
 
 #include <chiaki/takion.h>
+#include <chiaki/akira/takion_profile.h>
 #include <chiaki/seqnum.h>
 #include <chiaki/base64.h>
 
@@ -183,7 +184,7 @@ static MunitResult test_takion_format_congestion(const MunitParameter params[], 
 	static const uint8_t buf_expected[] = { 0x05, 0x00, 0x42, 0x00, 0x1a, 0x00, 0x0a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0xe5 };
 	munit_assert_memory_equal(sizeof(buf), buf, buf_expected);
 
-	err = chiaki_takion_packet_mac(&gkcrypt, buf, sizeof(buf), key_pos, NULL, NULL, false);
+	err = chiaki_takion_packet_mac(&gkcrypt, buf, sizeof(buf), key_pos, NULL, NULL, false, 12);
 	if(err != CHIAKI_ERR_SUCCESS)
 		return MUNIT_ERROR;
 
@@ -195,7 +196,91 @@ static MunitResult test_takion_format_congestion(const MunitParameter params[], 
 	return MUNIT_OK;
 }
 
+static MunitResult test_takion_ext_message_mac(const MunitParameter params[], void *user)
+{
+	(void)params;
+	(void)user;
+
+	static const uint8_t handshake_key[] = { 0x54, 0x65, 0x4c, 0x34, 0x5c, 0xac, 0x56, 0xb8, 0xea, 0xe6, 0x15, 0x2a, 0xde, 0x1c, 0xe2, 0xe8 };
+	static const uint8_t ecdh_secret[] = { 0x00, 0x34, 0xf8, 0x21, 0xc7, 0xd9, 0xde, 0xa9, 0xe9, 0x11, 0xca, 0x5a, 0xd6, 0x7d, 0x11, 0xce, 0x4f, 0x02, 0xb1, 0xce, 0x1e, 0xe7, 0xc3, 0x8d, 0x54, 0x39, 0xfa, 0x64, 0xe3, 0xdb, 0xd8, 0x0d };
+
+	static const uint8_t payload[] = { 0x08, 0x00, 0x12, 0x08, 0x08, 0x01, 0x10, 0x03, 0x18, 0x8e, 0xd2, 0x96, 0x01 };
+
+	const uint64_t key_pos = 0x1e5;
+	const unsigned int versions[] = { 18, 20 };
+
+	for(size_t i = 0; i < sizeof(versions) / sizeof(versions[0]); i++)
+	{
+		unsigned int version = versions[i];
+		size_t ext = chiaki_akira_takion_ext_header_size(version, 14);
+		munit_assert_size(ext, ==, version >= 20 ? CHIAKI_AKIRA_TAKION_EXT_HEADER_SIZE : 0);
+
+		uint8_t buf[64];
+		memset(buf, 0, sizeof(buf));
+		buf[0] = 14;
+		if(ext)
+			chiaki_akira_takion_ext_header_write(buf + 1, 0x0000abcd, 7);
+
+		ChiakiAkiraTakionExtMessageHeader header;
+		header.key_pos = (uint32_t)key_pos;
+		header.header_version = CHIAKI_AKIRA_TAKION_EXT_MESSAGE_HEADER_VERSION;
+		header.payload_type = 0;
+		header.flags = CHIAKI_AKIRA_TAKION_EXT_MESSAGE_FLAG_ENCRYPTED;
+		chiaki_akira_takion_ext_message_header_write(buf + 1 + ext, &header);
+
+		size_t payload_offset = 1 + ext + CHIAKI_AKIRA_TAKION_EXT_MESSAGE_HEADER_SIZE;
+		memcpy(buf + payload_offset, payload, sizeof(payload));
+		size_t buf_size = payload_offset + sizeof(payload);
+
+		ChiakiGKCrypt gkcrypt;
+		if(chiaki_gkcrypt_init(&gkcrypt, NULL, 0, 2, handshake_key, ecdh_secret) != CHIAKI_ERR_SUCCESS)
+			return MUNIT_ERROR;
+
+		if(chiaki_takion_packet_mac(&gkcrypt, buf, buf_size, key_pos, NULL, NULL, false, version) != CHIAKI_ERR_SUCCESS)
+			return MUNIT_ERROR;
+
+		uint8_t mac[CHIAKI_GKCRYPT_GMAC_SIZE];
+		memcpy(mac, buf + 1 + ext, sizeof(mac));
+
+		bool nonzero = false;
+		for(size_t j = 0; j < sizeof(mac); j++)
+			nonzero = nonzero || mac[j];
+		munit_assert_true(nonzero);
+
+		ChiakiAkiraTakionExtMessageHeader read;
+		munit_assert_int(chiaki_akira_takion_ext_message_header_read(buf + 1 + ext,
+					buf_size - 1 - ext, &read), ==, CHIAKI_ERR_SUCCESS);
+		munit_assert_uint32(read.key_pos, ==, (uint32_t)key_pos);
+		munit_assert_uint16(read.flags, ==, CHIAKI_AKIRA_TAKION_EXT_MESSAGE_FLAG_ENCRYPTED);
+		munit_assert_memory_equal(sizeof(payload), buf + payload_offset, payload);
+
+		uint8_t received[CHIAKI_GKCRYPT_GMAC_SIZE];
+		uint8_t expected[CHIAKI_GKCRYPT_GMAC_SIZE];
+		if(chiaki_takion_packet_mac(&gkcrypt, buf, buf_size, key_pos, expected, received, false, version) != CHIAKI_ERR_SUCCESS)
+			return MUNIT_ERROR;
+		munit_assert_memory_equal(sizeof(mac), received, mac);
+		munit_assert_memory_equal(sizeof(mac), expected, mac);
+
+		buf[buf_size - 1] ^= 0x01;
+		if(chiaki_takion_packet_mac(&gkcrypt, buf, buf_size, key_pos, expected, received, false, version) != CHIAKI_ERR_SUCCESS)
+			return MUNIT_ERROR;
+		munit_assert_memory_not_equal(sizeof(mac), expected, received);
+
+		chiaki_gkcrypt_fini(&gkcrypt);
+	}
+
+	return MUNIT_OK;
+}
+
 MunitTest tests_takion[] = {
+	{
+		"/ext_message_mac",
+		test_takion_ext_message_mac,
+		NULL,
+		NULL,
+		MUNIT_TEST_OPTION_NONE,
+		NULL
+	},
 	{
 		"/av_packet_parse",
 		test_av_packet_parse,

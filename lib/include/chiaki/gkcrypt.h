@@ -6,6 +6,7 @@
 #include "common.h"
 #include "log.h"
 #include "thread.h"
+#include "ecdh.h"
 
 #include <stdlib.h>
 #include <stdint.h>
@@ -60,7 +61,12 @@ struct chiaki_session_t;
 /**
  * @param key_buf_chunks if > 0, use a thread to generate the ctr mode key stream
  */
-CHIAKI_EXPORT ChiakiErrorCode chiaki_gkcrypt_init(ChiakiGKCrypt *gkcrypt, ChiakiLog *log, size_t key_buf_chunks, uint8_t index, const uint8_t *handshake_key, const uint8_t *ecdh_secret);
+CHIAKI_EXPORT ChiakiErrorCode chiaki_gkcrypt_init_ex(ChiakiGKCrypt *gkcrypt, ChiakiLog *log, size_t key_buf_chunks, uint8_t index, const uint8_t *handshake_key, const uint8_t *ecdh_secret, size_t ecdh_secret_size);
+
+static inline ChiakiErrorCode chiaki_gkcrypt_init(ChiakiGKCrypt *gkcrypt, ChiakiLog *log, size_t key_buf_chunks, uint8_t index, const uint8_t *handshake_key, const uint8_t *ecdh_secret)
+{
+	return chiaki_gkcrypt_init_ex(gkcrypt, log, key_buf_chunks, index, handshake_key, ecdh_secret, CHIAKI_ECDH_SECRET_SIZE);
+}
 
 CHIAKI_EXPORT void chiaki_gkcrypt_fini(ChiakiGKCrypt *gkcrypt);
 CHIAKI_EXPORT ChiakiErrorCode chiaki_gkcrypt_gen_key_stream(ChiakiGKCrypt *gkcrypt, uint64_t key_pos, uint8_t *buf, size_t buf_size);
@@ -72,18 +78,23 @@ CHIAKI_EXPORT void chiaki_gkcrypt_gen_new_gmac_key(ChiakiGKCrypt *gkcrypt, uint6
 CHIAKI_EXPORT void chiaki_gkcrypt_gen_tmp_gmac_key(ChiakiGKCrypt *gkcrypt, uint64_t index, uint8_t *key_out);
 CHIAKI_EXPORT ChiakiErrorCode chiaki_gkcrypt_gmac(ChiakiGKCrypt *gkcrypt, uint64_t key_pos, const uint8_t *buf, size_t buf_size, uint8_t *gmac_out);
 
-static inline ChiakiGKCrypt *chiaki_gkcrypt_new(ChiakiLog *log, size_t key_buf_chunks, uint8_t index, const uint8_t *handshake_key, const uint8_t *ecdh_secret)
+static inline ChiakiGKCrypt *chiaki_gkcrypt_new_ex(ChiakiLog *log, size_t key_buf_chunks, uint8_t index, const uint8_t *handshake_key, const uint8_t *ecdh_secret, size_t ecdh_secret_size)
 {
 	ChiakiGKCrypt *gkcrypt = CHIAKI_NEW(ChiakiGKCrypt);
 	if(!gkcrypt)
 		return NULL;
-	ChiakiErrorCode err = chiaki_gkcrypt_init(gkcrypt, log, key_buf_chunks, index, handshake_key, ecdh_secret);
+	ChiakiErrorCode err = chiaki_gkcrypt_init_ex(gkcrypt, log, key_buf_chunks, index, handshake_key, ecdh_secret, ecdh_secret_size);
 	if(err != CHIAKI_ERR_SUCCESS)
 	{
 		free(gkcrypt);
 		return NULL;
 	}
 	return gkcrypt;
+}
+
+static inline ChiakiGKCrypt *chiaki_gkcrypt_new(ChiakiLog *log, size_t key_buf_chunks, uint8_t index, const uint8_t *handshake_key, const uint8_t *ecdh_secret)
+{
+	return chiaki_gkcrypt_new_ex(log, key_buf_chunks, index, handshake_key, ecdh_secret, CHIAKI_ECDH_SECRET_SIZE);
 }
 
 static inline void chiaki_gkcrypt_free(ChiakiGKCrypt *gkcrypt)

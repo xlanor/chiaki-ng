@@ -2,10 +2,15 @@
 
 #include "chiaki/feedback.h"
 #include <chiaki/takion.h>
+#include <chiaki/akira/takion_profile.h>
 #include <chiaki/congestioncontrol.h>
 #include <chiaki/random.h>
 #include <chiaki/gkcrypt.h>
 #include <chiaki/time.h>
+
+#include <takion.pb.h>
+#include <pb_encode.h>
+#include <pb_decode.h>
 
 #include <fcntl.h>
 #include <stdbool.h>
@@ -68,44 +73,61 @@ typedef enum takion_packet_type_t {
 	TAKION_PACKET_TYPE_CONGESTION = 5,
 	TAKION_PACKET_TYPE_FEEDBACK_STATE = 6,
 	TAKION_PACKET_TYPE_CLIENT_INFO = 8,
+	TAKION_PACKET_TYPE_EXT_MESSAGE = 14,
 } TakionPacketType;
 
 /**
  * @return The offset of the mac of size CHIAKI_GKCRYPT_GMAC_SIZE inside a packet of type or -1 if unknown.
  */
-int takion_packet_type_mac_offset(TakionPacketType type)
+int takion_packet_type_mac_offset(TakionPacketType type, unsigned int version)
 {
+	int offset;
 	switch(type)
 	{
 		case TAKION_PACKET_TYPE_CONTROL:
-			return 5;
+			offset = 5;
+			break;
 		case TAKION_PACKET_TYPE_VIDEO:
 		case TAKION_PACKET_TYPE_AUDIO:
-			return 0xa;
+			offset = 0xa;
+			break;
 		case TAKION_PACKET_TYPE_CONGESTION:
-			return 7;
+			offset = 7;
+			break;
+		case TAKION_PACKET_TYPE_EXT_MESSAGE:
+			offset = 1;
+			break;
 		default:
 			return -1;
 	}
+	return offset + (int)chiaki_akira_takion_ext_header_size(version, (uint8_t)type);
 }
 
 /**
  * @return The offset of the 4-byte key_pos inside a packet of type or -1 if unknown.
  */
-int takion_packet_type_key_pos_offset(TakionPacketType type)
+int takion_packet_type_key_pos_offset(TakionPacketType type, unsigned int version)
 {
+	int offset;
 	switch(type)
 	{
 		case TAKION_PACKET_TYPE_CONTROL:
-			return 0x9;
+			offset = 0x9;
+			break;
 		case TAKION_PACKET_TYPE_VIDEO:
 		case TAKION_PACKET_TYPE_AUDIO:
-			return 0xe;
+			offset = 0xe;
+			break;
 		case TAKION_PACKET_TYPE_CONGESTION:
-			return 0xb;
+			offset = 0xb;
+			break;
+		case TAKION_PACKET_TYPE_EXT_MESSAGE:
+			offset = 5;
+			break;
 		default:
 			return -1;
 	}
+	return offset + (int)chiaki_akira_takion_ext_header_size(version, (uint8_t)type);
 }
 
 typedef enum takion_chunk_type_t {
@@ -142,6 +164,25 @@ typedef struct takion_message_payload_init_t
 #define TAKION_PSN_WRAPPER_SIZE 4
 
 #define TAKION_MSG_SIZE_ERRORS_MAX 32
+
+static size_t takion_splice_ext_header(ChiakiTakion *takion, uint8_t *buf, size_t buf_size)
+{
+	if(buf_size < 1)
+		return buf_size;
+
+	uint8_t base_type = buf[0] & TAKION_PACKET_BASE_TYPE_MASK;
+	size_t ext = chiaki_akira_takion_ext_header_size(takion->version, base_type);
+	if(!ext)
+		return buf_size;
+
+	memmove(buf + 1 + ext, buf + 1, buf_size - 1);
+
+	uint32_t timestamp = (uint32_t)(chiaki_time_now_monotonic_us() - takion->ext_header_epoch_us);
+	chiaki_akira_takion_ext_header_write(buf + 1, timestamp, takion->ext_header_counter);
+	takion->ext_header_counter++;
+
+	return buf_size + ext;
+}
 
 static size_t takion_add_cloud_wrapper(uint8_t *buf, size_t size, uint8_t psn_wrapper_type)
 {
@@ -201,6 +242,7 @@ static ChiakiErrorCode takion_recv(ChiakiTakion *takion, uint8_t *buf, size_t *b
 static ChiakiErrorCode takion_recv_message_init_ack(ChiakiTakion *takion, TakionMessagePayloadInitAck *payload);
 static ChiakiErrorCode takion_recv_message_cookie_ack(ChiakiTakion *takion);
 static void takion_handle_packet_av(ChiakiTakion *takion, uint8_t base_type, uint8_t *buf, size_t buf_size);
+static void takion_handle_packet_ext_message(ChiakiTakion *takion, uint8_t *buf, size_t buf_size);
 static ChiakiErrorCode takion_read_extra_sock_messages(ChiakiTakion *takion);
 
 CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_connect(ChiakiTakion *takion, ChiakiTakionConnectInfo *info, chiaki_socket_t *sock)
@@ -213,22 +255,15 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_connect(ChiakiTakion *takion, Chiaki
 	takion->service_type = chiaki_service_type_normalize(info->service_type);
 	takion->psn_wrapper_type = info->psn_wrapper_type;
 	takion->is_ping_handshake = info->is_ping_handshake;
+	takion->ext_header_epoch_us = chiaki_time_now_monotonic_us();
+	takion->ext_header_counter = 0;
 	takion->disable_audio_video = info->disable_audio_video;
 
-	switch(takion->version)
+	takion->av_packet_parse = chiaki_takion_av_packet_parse_for_version(takion->version);
+	if(!takion->av_packet_parse)
 	{
-		case 7:
-			takion->av_packet_parse = chiaki_takion_v7_av_packet_parse;
-			break;
-		case 9:
-			takion->av_packet_parse = chiaki_takion_v9_av_packet_parse;
-			break;
-		case 12:
-			takion->av_packet_parse = chiaki_takion_v12_av_packet_parse;
-			break;
-		default:
-			CHIAKI_LOGE(takion->log, "Unknown Takion Protocol Version %u", (unsigned int)takion->version);
-			return CHIAKI_ERR_INVALID_DATA;
+		CHIAKI_LOGE(takion->log, "Unsupported Takion Protocol Version %u", (unsigned int)takion->version);
+		return CHIAKI_ERR_INVALID_DATA;
 	}
 
 	takion->gkcrypt_local = NULL;
@@ -236,6 +271,7 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_connect(ChiakiTakion *takion, Chiaki
 	if(ret != CHIAKI_ERR_SUCCESS)
 		return ret;
 	takion->key_pos_local = 0;
+	takion->audio_header_dumps = 0;
 	takion->gkcrypt_remote = NULL;
 	takion->cb = info->cb;
 	takion->cb_user = info->cb_user;
@@ -527,7 +563,7 @@ static ChiakiErrorCode chiaki_takion_packet_read_key_pos(ChiakiTakion *takion, u
 		return CHIAKI_ERR_BUF_TOO_SMALL;
 
 	TakionPacketType base_type = buf[0] & TAKION_PACKET_BASE_TYPE_MASK;
-	int key_pos_offset = takion_packet_type_key_pos_offset(base_type);
+	int key_pos_offset = takion_packet_type_key_pos_offset(base_type, takion->version);
 	if(key_pos_offset < 0)
 		return CHIAKI_ERR_INVALID_DATA;
 
@@ -540,15 +576,15 @@ static ChiakiErrorCode chiaki_takion_packet_read_key_pos(ChiakiTakion *takion, u
 	return CHIAKI_ERR_SUCCESS;
 }
 
-CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_packet_mac(ChiakiGKCrypt *crypt, uint8_t *buf, size_t buf_size, uint64_t key_pos, uint8_t *mac_out, uint8_t *mac_old_out, bool has_psn_wrapper)
+CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_packet_mac(ChiakiGKCrypt *crypt, uint8_t *buf, size_t buf_size, uint64_t key_pos, uint8_t *mac_out, uint8_t *mac_old_out, bool has_psn_wrapper, unsigned int version)
 {
 	if(buf_size < 1)
 		return CHIAKI_ERR_BUF_TOO_SMALL;
 
 	int psn_offset = has_psn_wrapper ? TAKION_PSN_WRAPPER_SIZE : 0;
 	TakionPacketType base_type = buf[psn_offset] & TAKION_PACKET_BASE_TYPE_MASK;
-	int mac_offset = takion_packet_type_mac_offset(base_type);
-	int key_pos_offset = takion_packet_type_key_pos_offset(base_type);
+	int mac_offset = takion_packet_type_mac_offset(base_type, version);
+	int key_pos_offset = takion_packet_type_key_pos_offset(base_type, version);
 	if(mac_offset < 0 || key_pos_offset < 0)
 		return CHIAKI_ERR_INVALID_DATA;
 
@@ -593,7 +629,7 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_send(ChiakiTakion *takion, uint8_t *
 		return err;
 	uint8_t mac[CHIAKI_GKCRYPT_GMAC_SIZE];
 	bool has_psn_wrapper = takion->psn_wrapper_type > 0;
-	err = chiaki_takion_packet_mac(takion->gkcrypt_local, buf, buf_size, key_pos, mac, NULL, has_psn_wrapper);
+	err = chiaki_takion_packet_mac(takion->gkcrypt_local, buf, buf_size, key_pos, mac, NULL, has_psn_wrapper, takion->version);
 	chiaki_mutex_unlock(&takion->gkcrypt_local_mutex);
 	if(err != CHIAKI_ERR_SUCCESS)
 		return err;
@@ -752,10 +788,10 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_send_congestion(ChiakiTakion *takion
 	if(err != CHIAKI_ERR_SUCCESS)
 		return err;
 
-	uint8_t buf[CHIAKI_TAKION_CONGESTION_PACKET_SIZE + TAKION_PSN_WRAPPER_SIZE];
+	uint8_t buf[CHIAKI_TAKION_CONGESTION_PACKET_SIZE + CHIAKI_AKIRA_TAKION_EXT_HEADER_SIZE + TAKION_PSN_WRAPPER_SIZE];
 	chiaki_takion_format_congestion(buf, packet, key_pos);
 
-	size_t actual_size = CHIAKI_TAKION_CONGESTION_PACKET_SIZE;
+	size_t actual_size = takion_splice_ext_header(takion, buf, CHIAKI_TAKION_CONGESTION_PACKET_SIZE);
 	if(takion->psn_wrapper_type > 0)
 		actual_size = takion_add_cloud_wrapper(buf, actual_size, takion->psn_wrapper_type);
 
@@ -783,14 +819,17 @@ static ChiakiErrorCode takion_send_feedback_packet(ChiakiTakion *takion, uint8_t
 
 	*((chiaki_unaligned_uint32_t *)(buf + 4)) = htonl((uint32_t)key_pos);
 
-	size_t actual_size = buf_size;
+	size_t ext = chiaki_akira_takion_ext_header_size(takion->version, buf[0] & TAKION_PACKET_BASE_TYPE_MASK);
+	size_t takion_size = takion_splice_ext_header(takion, buf, buf_size);
+
+	size_t actual_size = takion_size;
 	if(takion->psn_wrapper_type > 0)
 		actual_size = takion_add_cloud_wrapper(buf, actual_size, takion->psn_wrapper_type);
 
 	bool has_psn_wrapper = takion->psn_wrapper_type > 0;
 	uint8_t *mac_buf = buf + (has_psn_wrapper ? TAKION_PSN_WRAPPER_SIZE : 0);
-	size_t mac_buf_size = has_psn_wrapper ? buf_size : actual_size;
-	err = chiaki_gkcrypt_gmac(takion->gkcrypt_local, key_pos, mac_buf, mac_buf_size, mac_buf + 8);
+	size_t mac_buf_size = has_psn_wrapper ? takion_size : actual_size;
+	err = chiaki_gkcrypt_gmac(takion->gkcrypt_local, key_pos, mac_buf, mac_buf_size, mac_buf + 8 + ext);
 	if(err != CHIAKI_ERR_SUCCESS)
 		goto beach;
 
@@ -803,7 +842,7 @@ beach:
 
 CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_send_feedback_state(ChiakiTakion *takion, ChiakiSeqNum16 seq_num, ChiakiFeedbackState *feedback_state)
 {
-	uint8_t buf[0xc + CHIAKI_FEEDBACK_STATE_BUF_SIZE_MAX + TAKION_PSN_WRAPPER_SIZE];
+	uint8_t buf[0xc + CHIAKI_FEEDBACK_STATE_BUF_SIZE_MAX + CHIAKI_AKIRA_TAKION_EXT_HEADER_SIZE + TAKION_PSN_WRAPPER_SIZE];
 	buf[0] = TAKION_PACKET_TYPE_FEEDBACK_STATE;
 	*((chiaki_unaligned_uint16_t *)(buf + 1)) = htons(seq_num);
 	buf[3] = 0; // TODO
@@ -844,14 +883,17 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_send_mic_packet(ChiakiTakion *takion
 
 	*((chiaki_unaligned_uint32_t *)(buf + 14)) = htonl((uint32_t)key_pos);
 
-	size_t actual_size = buf_size;
+	size_t ext = chiaki_akira_takion_ext_header_size(takion->version, buf[0] & TAKION_PACKET_BASE_TYPE_MASK);
+	size_t takion_size = takion_splice_ext_header(takion, buf, buf_size);
+
+	size_t actual_size = takion_size;
 	if(takion->psn_wrapper_type > 0)
 		actual_size = takion_add_cloud_wrapper(buf, actual_size, takion->psn_wrapper_type);
 
 	bool has_psn_wrapper = takion->psn_wrapper_type > 0;
 	uint8_t *mac_buf = buf + (has_psn_wrapper ? TAKION_PSN_WRAPPER_SIZE : 0);
-	size_t mac_buf_size = has_psn_wrapper ? buf_size : actual_size;
-	err = chiaki_gkcrypt_gmac(takion->gkcrypt_local, key_pos, mac_buf, mac_buf_size, mac_buf + 10);
+	size_t mac_buf_size = has_psn_wrapper ? takion_size : actual_size;
+	err = chiaki_gkcrypt_gmac(takion->gkcrypt_local, key_pos, mac_buf, mac_buf_size, mac_buf + 10 + ext);
 
 	if(err != CHIAKI_ERR_SUCCESS)
 		goto beach;
@@ -864,7 +906,7 @@ beach:
 
 CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_send_feedback_history(ChiakiTakion *takion, ChiakiSeqNum16 seq_num, uint8_t *payload, size_t payload_size)
 {
-	size_t buf_size = 0xc + payload_size + TAKION_PSN_WRAPPER_SIZE;
+	size_t buf_size = 0xc + payload_size + CHIAKI_AKIRA_TAKION_EXT_HEADER_SIZE + TAKION_PSN_WRAPPER_SIZE;
 	uint8_t *buf = malloc(buf_size);
 	if(!buf)
 		return CHIAKI_ERR_MEMORY;
@@ -1310,7 +1352,7 @@ static ChiakiErrorCode takion_handle_packet_mac(ChiakiTakion *takion, uint8_t ba
 		CHIAKI_LOGE(takion->log, "Takion failed to pull key_pos out of received packet");
 		return err;
 	}
-	err = chiaki_takion_packet_mac(takion->gkcrypt_remote, buf, buf_size, key_pos, mac_expected, mac, false);
+	err = chiaki_takion_packet_mac(takion->gkcrypt_remote, buf, buf_size, key_pos, mac_expected, mac, false, takion->version);
 	if(err != CHIAKI_ERR_SUCCESS)
 	{
 		CHIAKI_LOGE(takion->log, "Takion failed to calculate mac for received packet");
@@ -1375,6 +1417,9 @@ static void takion_handle_packet(ChiakiTakion *takion, uint8_t *buf, size_t buf_
 		case TAKION_PACKET_TYPE_CONTROL:
 			takion_handle_packet_message(takion, buf, buf_size);
 			break;
+		case TAKION_PACKET_TYPE_EXT_MESSAGE:
+			takion_handle_packet_ext_message(takion, buf, buf_size);
+			break;
 		case TAKION_PACKET_TYPE_VIDEO:
 			case TAKION_PACKET_TYPE_AUDIO:
 				if(takion->enable_crypt && !takion->gkcrypt_remote)
@@ -1390,6 +1435,141 @@ static void takion_handle_packet(ChiakiTakion *takion, uint8_t *buf, size_t buf_
 	}
 }
 
+
+static ChiakiErrorCode takion_send_ext_message(ChiakiTakion *takion, const tkproto_ExtMessage *msg)
+{
+	uint8_t payload[64];
+	pb_ostream_t stream = pb_ostream_from_buffer(payload, sizeof(payload));
+	if(!pb_encode(&stream, tkproto_ExtMessage_fields, msg))
+		return CHIAKI_ERR_BUF_TOO_SMALL;
+	size_t payload_size = stream.bytes_written;
+
+	size_t packet_size = 1 + CHIAKI_AKIRA_TAKION_EXT_MESSAGE_HEADER_SIZE + payload_size;
+
+	uint64_t key_pos;
+	ChiakiErrorCode err = chiaki_takion_crypt_advance_key_pos(takion,
+			packet_size + CHIAKI_AKIRA_TAKION_EXT_HEADER_SIZE + CHIAKI_GKCRYPT_BLOCK_SIZE, &key_pos);
+	if(err != CHIAKI_ERR_SUCCESS)
+		return err;
+
+	uint8_t buf[1 + CHIAKI_AKIRA_TAKION_EXT_HEADER_SIZE + CHIAKI_AKIRA_TAKION_EXT_MESSAGE_HEADER_SIZE
+		+ sizeof(payload) + TAKION_PSN_WRAPPER_SIZE];
+	buf[0] = TAKION_PACKET_TYPE_EXT_MESSAGE;
+
+	ChiakiAkiraTakionExtMessageHeader header;
+	header.key_pos = (uint32_t)key_pos;
+	header.header_version = CHIAKI_AKIRA_TAKION_EXT_MESSAGE_HEADER_VERSION;
+	header.payload_type = 0;
+	header.flags = takion->gkcrypt_local ? CHIAKI_AKIRA_TAKION_EXT_MESSAGE_FLAG_ENCRYPTED : 0;
+	chiaki_akira_takion_ext_message_header_write(buf + 1, &header);
+
+	memcpy(buf + 1 + CHIAKI_AKIRA_TAKION_EXT_MESSAGE_HEADER_SIZE, payload, payload_size);
+
+	if(header.flags & CHIAKI_AKIRA_TAKION_EXT_MESSAGE_FLAG_ENCRYPTED)
+	{
+		err = chiaki_gkcrypt_encrypt(takion->gkcrypt_local, key_pos + CHIAKI_GKCRYPT_BLOCK_SIZE,
+				buf + 1 + CHIAKI_AKIRA_TAKION_EXT_MESSAGE_HEADER_SIZE, payload_size);
+		if(err != CHIAKI_ERR_SUCCESS)
+			return err;
+	}
+
+	size_t actual_size = takion_splice_ext_header(takion, buf, packet_size);
+	if(takion->psn_wrapper_type > 0)
+		actual_size = takion_add_cloud_wrapper(buf, actual_size, takion->psn_wrapper_type);
+
+	return chiaki_takion_send(takion, buf, actual_size, key_pos);
+}
+
+static void takion_handle_packet_ext_message(ChiakiTakion *takion, uint8_t *buf, size_t buf_size)
+{
+	size_t ext = chiaki_akira_takion_ext_header_size(takion->version, TAKION_PACKET_TYPE_EXT_MESSAGE);
+	size_t header_offset = 1 + ext;
+	size_t payload_offset = header_offset + CHIAKI_AKIRA_TAKION_EXT_MESSAGE_HEADER_SIZE;
+
+	if(buf_size < payload_offset)
+	{
+		CHIAKI_LOGE(takion->log, "Takion ExtMessage packet of size %#llx is too small for its header",
+				(unsigned long long)buf_size);
+		free(buf);
+		return;
+	}
+
+	ChiakiAkiraTakionExtMessageHeader header;
+	ChiakiErrorCode err = chiaki_akira_takion_ext_message_header_read(buf + header_offset,
+			buf_size - header_offset, &header);
+	if(err != CHIAKI_ERR_SUCCESS)
+	{
+		CHIAKI_LOGE(takion->log, "Takion ExtMessage header version %#x is not supported",
+				buf[header_offset + 8]);
+		free(buf);
+		return;
+	}
+
+	uint8_t *payload = buf + payload_offset;
+	size_t payload_size = buf_size - payload_offset;
+
+	if(header.flags & CHIAKI_AKIRA_TAKION_EXT_MESSAGE_FLAG_ENCRYPTED)
+	{
+		if(!takion->gkcrypt_remote)
+		{
+			CHIAKI_LOGE(takion->log, "Takion ExtMessage is encrypted but there is no remote key");
+			free(buf);
+			return;
+		}
+		uint64_t key_pos;
+		err = chiaki_takion_packet_read_key_pos(takion, buf, buf_size, &key_pos);
+		if(err == CHIAKI_ERR_SUCCESS)
+			err = chiaki_gkcrypt_decrypt(takion->gkcrypt_remote, key_pos + CHIAKI_GKCRYPT_BLOCK_SIZE,
+					payload, payload_size);
+		if(err != CHIAKI_ERR_SUCCESS)
+		{
+			CHIAKI_LOGE(takion->log, "Takion failed to decrypt ExtMessage payload");
+			free(buf);
+			return;
+		}
+	}
+
+	tkproto_ExtMessage msg;
+	memset(&msg, 0, sizeof(msg));
+	pb_istream_t stream = pb_istream_from_buffer(payload, payload_size);
+	if(!pb_decode(&stream, tkproto_ExtMessage_fields, &msg))
+	{
+		CHIAKI_LOGE(takion->log, "Takion failed to decode ExtMessage payload");
+		free(buf);
+		return;
+	}
+
+	if(msg.type != tkproto_ExtMessage_PayloadType_RTT || !msg.has_rtt_payload)
+	{
+		CHIAKI_LOGD(takion->log, "Takion ExtMessage of type %d ignored", (int)msg.type);
+		free(buf);
+		return;
+	}
+
+	if(!msg.rtt_payload.has_ping || !msg.rtt_payload.ping)
+	{
+		free(buf);
+		return;
+	}
+
+	tkproto_ExtMessage pong;
+	memset(&pong, 0, sizeof(pong));
+	pong.type = tkproto_ExtMessage_PayloadType_RTT;
+	pong.has_rtt_payload = true;
+	pong.rtt_payload.has_ping = true;
+	pong.rtt_payload.ping = false;
+	pong.rtt_payload.has_entry_index = msg.rtt_payload.has_entry_index;
+	pong.rtt_payload.entry_index = msg.rtt_payload.entry_index;
+	pong.rtt_payload.has_orig_send_timestamp_us = msg.rtt_payload.has_orig_send_timestamp_us;
+	pong.rtt_payload.orig_send_timestamp_us = msg.rtt_payload.orig_send_timestamp_us;
+
+	free(buf);
+
+	err = takion_send_ext_message(takion, &pong);
+	if(err != CHIAKI_ERR_SUCCESS)
+		CHIAKI_LOGE(takion->log, "Takion failed to send RTT pong for entry %u",
+				(unsigned int)pong.rtt_payload.entry_index);
+}
 
 static void takion_handle_packet_message(ChiakiTakion *takion, uint8_t *buf, size_t buf_size)
 {
@@ -1737,6 +1917,14 @@ static void takion_handle_packet_av(ChiakiTakion *takion, uint8_t base_type, uin
 		free(buf);
 		return;
 	}
+	if(base_type == TAKION_PACKET_TYPE_AUDIO && takion->audio_header_dumps < 4)
+	{
+		takion->audio_header_dumps++;
+		CHIAKI_LOGI(takion->log, "Takion raw audio AV packet (v%u, %zu bytes):",
+			(unsigned int)takion->version, buf_size);
+		chiaki_log_hexdump(takion->log, CHIAKI_LOG_INFO, buf, buf_size < 48 ? buf_size : 48);
+	}
+
 	ChiakiTakionAVPacket packet;
 	ChiakiErrorCode err = takion->av_packet_parse(&packet, &takion->key_state, buf, buf_size);
 	if(err != CHIAKI_ERR_SUCCESS)
@@ -1811,7 +1999,7 @@ static void takion_handle_packet_av(ChiakiTakion *takion, uint8_t base_type, uin
 	takion_av_queue_flush_with_timeout(takion, queue, head_wait, head_wait_seq_num);
 }
 
-static ChiakiErrorCode av_packet_parse(bool v12, ChiakiTakionAVPacket *packet, ChiakiKeyState *key_state, uint8_t *buf, size_t buf_size)
+static ChiakiErrorCode av_packet_parse(bool v12, bool mask_av_tag, size_t ext_header_size, ChiakiTakionAVPacket *packet, ChiakiKeyState *key_state, uint8_t *buf, size_t buf_size)
 {
 	memset(packet, 0, sizeof(ChiakiTakionAVPacket));
 
@@ -1823,12 +2011,15 @@ static ChiakiErrorCode av_packet_parse(bool v12, ChiakiTakionAVPacket *packet, C
 	if(base_type != TAKION_PACKET_TYPE_VIDEO && base_type != TAKION_PACKET_TYPE_AUDIO)
 		return CHIAKI_ERR_INVALID_DATA;
 
+	if(buf_size < 1 + ext_header_size)
+		return CHIAKI_ERR_BUF_TOO_SMALL;
+
 	packet->is_video = base_type == TAKION_PACKET_TYPE_VIDEO;
 
 	packet->uses_nalu_info_structs = ((buf[0] >> 4) & 1) != 0;
 
-	uint8_t *av = buf+1;
-	size_t av_size = buf_size-1;
+	uint8_t *av = buf + 1 + ext_header_size;
+	size_t av_size = buf_size - 1 - ext_header_size;
 	size_t av_header_size = v12
 		? (packet->is_video ? CHIAKI_TAKION_V12_AV_HEADER_SIZE_VIDEO : CHIAKI_TAKION_V12_AV_HEADER_SIZE_AUDIO)
 		: (packet->is_video ? CHIAKI_TAKION_V9_AV_HEADER_SIZE_VIDEO : CHIAKI_TAKION_V9_AV_HEADER_SIZE_AUDIO);
@@ -1892,7 +2083,9 @@ static ChiakiErrorCode av_packet_parse(bool v12, ChiakiTakionAVPacket *packet, C
 
 	if(v12 && !packet->is_video)
 	{
-		packet->is_haptics = *av == 0x02;
+		packet->av_tag = mask_av_tag ? (uint8_t)(*av & CHIAKI_AKIRA_AV_TAG_MASK) : *av;
+		packet->av_tag_valid = true;
+		packet->is_haptics = chiaki_akira_av_tag_is_haptics(packet->av_tag);
 		av += 1;
 		av_size -= 1;
 	}
@@ -1905,12 +2098,37 @@ static ChiakiErrorCode av_packet_parse(bool v12, ChiakiTakionAVPacket *packet, C
 
 CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_v9_av_packet_parse(ChiakiTakionAVPacket *packet, ChiakiKeyState *key_state, uint8_t *buf, size_t buf_size)
 {
-	return av_packet_parse(false, packet, key_state, buf, buf_size);
+	return av_packet_parse(false, false, 0, packet, key_state, buf, buf_size);
 }
 
 CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_v12_av_packet_parse(ChiakiTakionAVPacket *packet, ChiakiKeyState *key_state, uint8_t *buf, size_t buf_size)
 {
-	return av_packet_parse(true, packet, key_state, buf, buf_size);
+	return av_packet_parse(true, false, 0, packet, key_state, buf, buf_size);
+}
+
+CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_v15_av_packet_parse(ChiakiTakionAVPacket *packet, ChiakiKeyState *key_state, uint8_t *buf, size_t buf_size)
+{
+	return av_packet_parse(true, true, 0, packet, key_state, buf, buf_size);
+}
+
+CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_v20_av_packet_parse(ChiakiTakionAVPacket *packet, ChiakiKeyState *key_state, uint8_t *buf, size_t buf_size)
+{
+	return av_packet_parse(true, true, CHIAKI_AKIRA_TAKION_EXT_HEADER_SIZE, packet, key_state, buf, buf_size);
+}
+
+CHIAKI_EXPORT ChiakiTakionAVPacketParse chiaki_takion_av_packet_parse_for_version(unsigned int version)
+{
+	if(!chiaki_akira_takion_version_known(version))
+		return NULL;
+	if(chiaki_akira_takion_feature_supported(CHIAKI_AKIRA_TAKION_FEATURE_EXTENDED_HEADER, version))
+		return chiaki_takion_v20_av_packet_parse;
+	if(version == 7)
+		return chiaki_takion_v7_av_packet_parse;
+	if(chiaki_akira_takion_feature_supported(CHIAKI_AKIRA_TAKION_FEATURE_AV_UNIT_COUNT_ONLY, version))
+		return chiaki_takion_v15_av_packet_parse;
+	if(version >= 12)
+		return chiaki_takion_v12_av_packet_parse;
+	return chiaki_takion_v9_av_packet_parse;
 }
 
 CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_v7_av_packet_format_header(uint8_t *buf, size_t buf_size, size_t *header_size_out, ChiakiTakionAVPacket *packet)

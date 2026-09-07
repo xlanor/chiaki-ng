@@ -10,6 +10,7 @@ set(HEADER_FILES
 		include/chiaki/ctrl.h
 		include/chiaki/rpcrypt.h
 		include/chiaki/takion.h
+		include/chiaki/akira/takion_profile.h
 		include/chiaki/senkusha.h
 		include/chiaki/streamconnection.h
 		include/chiaki/ecdh.h
@@ -57,6 +58,7 @@ set(SOURCE_FILES
 		src/ctrl.c
 		src/rpcrypt.c
 		src/takion.c
+		src/akira/takion_profile.c
 		src/senkusha.c
 		src/utils.h
 		src/pb_utils.h
@@ -118,6 +120,8 @@ if(CHIAKI_LIB_ENABLE_LIBNX_CRYPTO)
 	list(APPEND SOURCE_FILES
 		src/crypto/libnx/microecc/uECC.c
 		src/crypto/libnx/microecc/uECC.h
+		src/crypto/libnx/microecc/uECC_p521.c
+		src/crypto/libnx/microecc/uECC_p521.h
 		src/crypto/libnx/microecc/uECC_vli.h
 		src/crypto/libnx/microecc/uECC_config.h
 		src/crypto/libnx/microecc/types.h

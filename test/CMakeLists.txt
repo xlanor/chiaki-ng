@@ -8,6 +8,10 @@ set(CHIAKI_UNIT_SOURCES
 				rpcrypt.c
 				gkcrypt.c
 				takion.c
+				akira_takion_profile.c
+				akira_ecdh_p521.c
+				"${CMAKE_SOURCE_DIR}/lib/src/crypto/libnx/microecc/uECC.c"
+				"${CMAKE_SOURCE_DIR}/lib/src/crypto/libnx/microecc/uECC_p521.c"
 				seqnum.c
 				keystate.c
 				reorderqueue.c
@@ -28,6 +32,9 @@ add_executable(chiaki-unit ${CHIAKI_UNIT_SOURCES})
 add_test(NAME unit COMMAND chiaki-unit)
 
 target_link_libraries(chiaki-unit chiaki-lib munit)
+target_include_directories(chiaki-unit PRIVATE "${CMAKE_SOURCE_DIR}/lib/src")
+find_package(OpenSSL REQUIRED)
+target_link_libraries(chiaki-unit OpenSSL::Crypto)
 if(TARGET PkgConfig::json-c)
 	target_link_libraries(chiaki-unit PkgConfig::json-c)
 endif()
@@ -89,6 +96,7 @@ if(CHIAKI_ENABLE_LIBNX_TEST)
 		${CMAKE_SOURCE_DIR}/lib/src/remote/rudpsendbuffer.c
 		# libnx crypto sources
 		${CMAKE_SOURCE_DIR}/lib/src/crypto/libnx/microecc/uECC.c
+		${CMAKE_SOURCE_DIR}/lib/src/crypto/libnx/microecc/uECC_p521.c
 		${CMAKE_SOURCE_DIR}/lib/src/crypto/libnx/aes_cfb.c
 		${CMAKE_SOURCE_DIR}/lib/src/crypto/libnx/gmac.c
 		# libnx stubs (OpenSSL implementations)

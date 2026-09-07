@@ -100,6 +100,7 @@ typedef struct chiaki_connect_info_t
 	uint32_t cloud_mtu_out;
 	uint64_t cloud_rtt_us;
 	bool enable_idr_on_fec_failure;
+	unsigned int takion_version_override;
 } ChiakiConnectInfo;
 
 
@@ -238,6 +239,7 @@ typedef struct chiaki_session_t
 		bool enable_dualsense;
 		uint8_t psn_account_id[CHIAKI_PSN_ACCOUNT_ID_SIZE];
 		bool enable_idr_on_fec_failure;
+		unsigned int takion_version_override;
 	} connect_info;
 
 	ChiakiTarget target;
@@ -299,6 +301,8 @@ typedef struct chiaki_session_t
 CHIAKI_EXPORT ChiakiErrorCode chiaki_session_init(ChiakiSession *session, ChiakiConnectInfo *connect_info, ChiakiLog *log);
 CHIAKI_EXPORT void chiaki_session_fini(ChiakiSession *session);
 CHIAKI_EXPORT ChiakiErrorCode chiaki_session_start(ChiakiSession *session);
+CHIAKI_EXPORT unsigned int chiaki_session_takion_version(ChiakiSession *session);
+CHIAKI_EXPORT ChiakiECDHCurve chiaki_session_ecdh_curve(ChiakiSession *session);
 CHIAKI_EXPORT ChiakiErrorCode chiaki_session_stop(ChiakiSession *session);
 CHIAKI_EXPORT ChiakiErrorCode chiaki_session_join(ChiakiSession *session);
 

@@ -6,6 +6,7 @@
 #include <chiaki/http.h>
 #include <chiaki/base64.h>
 #include <chiaki/random.h>
+#include <chiaki/akira/takion_profile.h>
 
 #include <stdlib.h>
 #include <string.h>
@@ -353,6 +354,7 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_session_init(ChiakiSession *session, Chiaki
 	session->connect_info.enable_keyboard = connect_info->enable_keyboard;
 	session->connect_info.enable_dualsense = connect_info->enable_dualsense;
 	session->connect_info.enable_idr_on_fec_failure = connect_info->enable_idr_on_fec_failure;
+	session->connect_info.takion_version_override = connect_info->takion_version_override;
 
 	return CHIAKI_ERR_SUCCESS;
 
@@ -398,6 +400,22 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_session_start(ChiakiSession *session)
 		return err;
 	chiaki_thread_set_name(&session->session_thread, "Chiaki Session");
 	return err;
+}
+
+CHIAKI_EXPORT unsigned int chiaki_session_takion_version(ChiakiSession *session)
+{
+	unsigned int base = chiaki_service_type_is_cloud(session->service_type)
+		? (session->service_type == CHIAKI_SERVICE_TYPE_PSCLOUD ? 12 : 9)
+		: (chiaki_target_is_ps5(session->target) ? 15 : 9);
+	return chiaki_akira_takion_version_select(base, session->connect_info.takion_version_override);
+}
+
+CHIAKI_EXPORT ChiakiECDHCurve chiaki_session_ecdh_curve(ChiakiSession *session)
+{
+	return chiaki_akira_takion_feature_supported(CHIAKI_AKIRA_TAKION_FEATURE_ECDH_P521,
+			chiaki_session_takion_version(session))
+		? CHIAKI_ECDH_CURVE_SECP521R1
+		: CHIAKI_ECDH_CURVE_SECP256K1;
 }
 
 CHIAKI_EXPORT ChiakiErrorCode chiaki_session_stop(ChiakiSession *session)
@@ -790,7 +808,7 @@ ctrl_failed:
 		}
 	}
 
-	err = chiaki_ecdh_init(&session->ecdh);
+	err = chiaki_ecdh_init(&session->ecdh, chiaki_session_ecdh_curve(session));
 	if(err != CHIAKI_ERR_SUCCESS)
 	{
 		CHIAKI_LOGE(session->log, "Session failed to initialize ECDH");

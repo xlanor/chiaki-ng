@@ -27,9 +27,16 @@ typedef struct chiaki_audio_sink_t
 	ChiakiAudioSinkFrame frame_cb;
 } ChiakiAudioSink;
 
+typedef enum chiaki_audio_receiver_kind_t
+{
+	CHIAKI_AUDIO_RECEIVER_KIND_AUDIO = 0,
+	CHIAKI_AUDIO_RECEIVER_KIND_HAPTICS
+} ChiakiAudioReceiverKind;
+
 typedef struct chiaki_audio_receiver_t
 {
 	struct chiaki_session_t *session;
+	ChiakiAudioReceiverKind kind;
 	ChiakiLog *log;
 	ChiakiMutex mutex;
 	ChiakiSeqNum16 frame_index_prev;
@@ -38,6 +45,8 @@ typedef struct chiaki_audio_receiver_t
 	bool playback_started;
 	bool frame_index_startup; // whether frame_index_prev has definitely not wrapped yet
 	ChiakiPacketStats *packet_stats;
+	unsigned int takion_version;
+	bool unit_size_mismatch_logged;
 	void *pscloud_audio_reassembler;
 	struct {
 		bool occupied;
@@ -52,6 +61,7 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_audio_receiver_init(ChiakiAudioReceiver *au
 CHIAKI_EXPORT void chiaki_audio_receiver_fini(ChiakiAudioReceiver *audio_receiver);
 CHIAKI_EXPORT void chiaki_audio_receiver_stream_info(ChiakiAudioReceiver *audio_receiver, ChiakiAudioHeader *audio_header);
 CHIAKI_EXPORT void chiaki_audio_receiver_av_packet(ChiakiAudioReceiver *audio_receiver, ChiakiTakionAVPacket *packet);
+CHIAKI_EXPORT void chiaki_audio_receiver_set_takion_version(ChiakiAudioReceiver *audio_receiver, unsigned int version);
 
 static inline ChiakiAudioReceiver *chiaki_audio_receiver_new(struct chiaki_session_t *session, ChiakiPacketStats *packet_stats)
 {

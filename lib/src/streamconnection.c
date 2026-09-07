@@ -3,6 +3,7 @@
 
 #include "chiaki/common.h"
 #include <chiaki/streamconnection.h>
+#include <chiaki/akira/takion_profile.h>
 #include <chiaki/session.h>
 #include <chiaki/launchspec.h>
 #include <chiaki/base64.h>
@@ -10,6 +11,7 @@
 #include <chiaki/video.h>
 
 #include <string.h>
+#include <stdio.h>
 #include <inttypes.h>
 #include <assert.h>
 #ifndef _WIN32
@@ -51,6 +53,7 @@ static void stream_connection_takion_data_rumble(ChiakiStreamConnection *stream_
 static void stream_connection_takion_data_pad_info(ChiakiStreamConnection *stream_connection, uint8_t *buf, size_t buf_size);
 static void stream_connection_takion_data_trigger_effects(ChiakiStreamConnection *stream_connection, uint8_t *buf, size_t buf_size);
 static ChiakiErrorCode stream_connection_send_big(ChiakiStreamConnection *stream_connection);
+static void stream_connection_log_av_tag_census(ChiakiStreamConnection *stream_connection);
 static ChiakiErrorCode stream_connection_send_controller_connection(ChiakiStreamConnection *stream_connection);
 static ChiakiErrorCode stream_connection_enable_microphone(ChiakiStreamConnection *stream_connection);
 static ChiakiErrorCode stream_connection_send_disconnect(ChiakiStreamConnection *stream_connection);
@@ -93,6 +96,8 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_stream_connection_init(ChiakiStreamConnecti
 	stream_connection->video_receiver = NULL;
 	stream_connection->audio_receiver = NULL;
 	stream_connection->haptics_receiver = NULL;
+	memset(stream_connection->av_tag_census, 0, sizeof(stream_connection->av_tag_census));
+	stream_connection->av_tag_census_total = 0;
 
 	err = chiaki_mutex_init(&stream_connection->feedback_sender_mutex, false);
 	if(err != CHIAKI_ERR_SUCCESS)
@@ -168,9 +173,17 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_stream_connection_run(ChiakiStreamConnectio
 
 	takion_info.enable_crypt = true;
 	takion_info.enable_dualsense = session->connect_info.enable_dualsense;
-	takion_info.protocol_version = chiaki_service_type_is_cloud(session->service_type)
+	unsigned int protocol_version_base = chiaki_service_type_is_cloud(session->service_type)
 		? (session->service_type == CHIAKI_SERVICE_TYPE_PSCLOUD ? 12 : 9)
 		: (chiaki_target_is_ps5(session->target) ? 12 : 9);
+	takion_info.protocol_version = chiaki_session_takion_version(session);
+	if(takion_info.protocol_version != protocol_version_base)
+		CHIAKI_LOGI(session->log, "StreamConnection using takion protocol version %u instead of %u",
+			takion_info.protocol_version, protocol_version_base);
+	else if(session->connect_info.takion_version_override
+		&& session->connect_info.takion_version_override != protocol_version_base)
+		CHIAKI_LOGW(session->log, "StreamConnection ignoring takion version override %u, not implemented yet",
+			session->connect_info.takion_version_override);
 	takion_info.service_type = session->service_type;
 	takion_info.psn_wrapper_type = chiaki_service_type_is_cloud(session->service_type)
 		? session->cloud_psn_wrapper_type
@@ -207,6 +220,11 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_stream_connection_run(ChiakiStreamConnectio
 		chiaki_mutex_unlock(&stream_connection->state_mutex);
 		goto err_audio_receiver;
 	}
+
+	stream_connection->haptics_receiver->kind = CHIAKI_AUDIO_RECEIVER_KIND_HAPTICS;
+
+	chiaki_audio_receiver_set_takion_version(stream_connection->audio_receiver, takion_info.protocol_version);
+	chiaki_audio_receiver_set_takion_version(stream_connection->haptics_receiver, takion_info.protocol_version);
 
 	stream_connection->video_receiver = chiaki_video_receiver_new(session, &stream_connection->packet_stats);
 	if(!stream_connection->video_receiver)
@@ -370,6 +388,8 @@ close_takion:
 
 	chiaki_takion_close(&stream_connection->takion);
 	CHIAKI_LOGI(session->log, "StreamConnection closed takion");
+	if(stream_connection->log->level_mask & CHIAKI_LOG_DEBUG)
+		stream_connection_log_av_tag_census(stream_connection);
 
 err_video_receiver:
 	chiaki_mutex_lock(&stream_connection->state_mutex);
@@ -732,13 +752,13 @@ static ChiakiErrorCode stream_connection_init_crypt(ChiakiStreamConnection *stre
 {
 	ChiakiSession *session = stream_connection->session;
 
-	stream_connection->gkcrypt_local = chiaki_gkcrypt_new(stream_connection->log, CHIAKI_GKCRYPT_KEY_BUF_BLOCKS_DEFAULT, 2, session->handshake_key, stream_connection->ecdh_secret);
+	stream_connection->gkcrypt_local = chiaki_gkcrypt_new_ex(stream_connection->log, CHIAKI_GKCRYPT_KEY_BUF_BLOCKS_DEFAULT, 2, session->handshake_key, stream_connection->ecdh_secret, chiaki_ecdh_secret_size(&session->ecdh));
 	if(!stream_connection->gkcrypt_local)
 	{
 		CHIAKI_LOGE(stream_connection->log, "StreamConnection failed to initialize local GKCrypt with index 2");
 		return CHIAKI_ERR_UNKNOWN;
 	}
-	stream_connection->gkcrypt_remote = chiaki_gkcrypt_new(stream_connection->log, CHIAKI_GKCRYPT_KEY_BUF_BLOCKS_DEFAULT, 3, session->handshake_key, stream_connection->ecdh_secret);
+	stream_connection->gkcrypt_remote = chiaki_gkcrypt_new_ex(stream_connection->log, CHIAKI_GKCRYPT_KEY_BUF_BLOCKS_DEFAULT, 3, session->handshake_key, stream_connection->ecdh_secret, chiaki_ecdh_secret_size(&session->ecdh));
 	if(!stream_connection->gkcrypt_remote)
 	{
 		CHIAKI_LOGE(stream_connection->log, "StreamConnection failed to initialize remote GKCrypt with index 3");
@@ -754,7 +774,7 @@ static ChiakiErrorCode stream_connection_init_crypt(ChiakiStreamConnection *stre
 
 static void stream_connection_takion_data_expect_bang(ChiakiStreamConnection *stream_connection, uint8_t *buf, size_t buf_size)
 {
-	char ecdh_pub_key[128];
+	char ecdh_pub_key[CHIAKI_ECDH_PUB_KEY_SIZE_MAX];
 	ChiakiPBDecodeBuf ecdh_pub_key_buf = { sizeof(ecdh_pub_key), 0, (uint8_t *)ecdh_pub_key };
 	char ecdh_sig[32];
 	ChiakiPBDecodeBuf ecdh_sig_buf = { sizeof(ecdh_sig), 0, (uint8_t *)ecdh_sig };
@@ -826,7 +846,8 @@ static void stream_connection_takion_data_expect_bang(ChiakiStreamConnection *st
 	}
 
 	assert(!stream_connection->ecdh_secret);
-	stream_connection->ecdh_secret = malloc(CHIAKI_ECDH_SECRET_SIZE);
+	size_t ecdh_secret_size = chiaki_ecdh_secret_size(&stream_connection->session->ecdh);
+	stream_connection->ecdh_secret = malloc(ecdh_secret_size);
 	if(!stream_connection->ecdh_secret)
 	{
 		CHIAKI_LOGE(stream_connection->log, "StreamConnection failed to alloc ECDH secret memory");
@@ -1062,7 +1083,7 @@ static ChiakiErrorCode stream_connection_send_big(ChiakiStreamConnection *stream
 		launch_spec_b64_ptr = launch_spec_buf.b64;
 	}
 
-	uint8_t ecdh_pub_key[128];
+	uint8_t ecdh_pub_key[CHIAKI_ECDH_PUB_KEY_SIZE_MAX];
 	ChiakiPBBuf ecdh_pub_key_buf = { sizeof(ecdh_pub_key), ecdh_pub_key };
 	uint8_t ecdh_sig[32];
 	ChiakiPBBuf ecdh_sig_buf = { sizeof(ecdh_sig), ecdh_sig };
@@ -1253,9 +1274,35 @@ static ChiakiErrorCode stream_connection_send_disconnect(ChiakiStreamConnection 
 	return err;
 }
 
+static void stream_connection_log_av_tag_census(ChiakiStreamConnection *stream_connection)
+{
+	char line[256];
+	size_t off = 0;
+	for(uint8_t tag = 0; tag < 32; tag++)
+	{
+		if(!stream_connection->av_tag_census[tag])
+			continue;
+		int n = snprintf(line + off, sizeof(line) - off, " %u=%llu", (unsigned int)tag,
+				(unsigned long long)stream_connection->av_tag_census[tag]);
+		if(n < 0 || (size_t)n >= sizeof(line) - off)
+			break;
+		off += (size_t)n;
+	}
+	CHIAKI_LOGD(stream_connection->log, "StreamConnection AV sub-tag census (%llu audio packets):%s",
+			(unsigned long long)stream_connection->av_tag_census_total, off ? line : " none");
+}
+
 static void stream_connection_takion_av(ChiakiStreamConnection *stream_connection, ChiakiTakionAVPacket *packet)
 {
 	chiaki_gkcrypt_decrypt(stream_connection->gkcrypt_remote, packet->key_pos + CHIAKI_GKCRYPT_BLOCK_SIZE, packet->data, packet->data_size);
+
+	if(!packet->is_video && packet->av_tag_valid
+		&& (stream_connection->log->level_mask & CHIAKI_LOG_DEBUG))
+	{
+		stream_connection->av_tag_census[packet->av_tag & 0x1f]++;
+		if(++stream_connection->av_tag_census_total % 1000 == 0)
+			stream_connection_log_av_tag_census(stream_connection);
+	}
 
 	if(packet->is_video)
 		chiaki_video_receiver_av_packet(stream_connection->video_receiver, packet);

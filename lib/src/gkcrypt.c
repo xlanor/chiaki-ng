@@ -21,11 +21,11 @@
 
 #define KEY_BUF_CHUNK_SIZE 0x1000
 
-static ChiakiErrorCode gkcrypt_gen_key_iv(ChiakiGKCrypt *gkcrypt, uint8_t index, const uint8_t *handshake_key, const uint8_t *ecdh_secret);
+static ChiakiErrorCode gkcrypt_gen_key_iv(ChiakiGKCrypt *gkcrypt, uint8_t index, const uint8_t *handshake_key, const uint8_t *ecdh_secret, size_t ecdh_secret_size);
 
 static void *gkcrypt_thread_func(void *user);
 
-CHIAKI_EXPORT ChiakiErrorCode chiaki_gkcrypt_init(ChiakiGKCrypt *gkcrypt, ChiakiLog *log, size_t key_buf_chunks, uint8_t index, const uint8_t *handshake_key, const uint8_t *ecdh_secret)
+CHIAKI_EXPORT ChiakiErrorCode chiaki_gkcrypt_init_ex(ChiakiGKCrypt *gkcrypt, ChiakiLog *log, size_t key_buf_chunks, uint8_t index, const uint8_t *handshake_key, const uint8_t *ecdh_secret, size_t ecdh_secret_size)
 {
 	gkcrypt->log = log;
 	gkcrypt->index = index;
@@ -59,7 +59,7 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_gkcrypt_init(ChiakiGKCrypt *gkcrypt, Chiaki
 	{
 		gkcrypt->key_buf = NULL;
 	}
-	err = gkcrypt_gen_key_iv(gkcrypt, index, handshake_key, ecdh_secret);
+	err = gkcrypt_gen_key_iv(gkcrypt, index, handshake_key, ecdh_secret, ecdh_secret_size);
 	if(err != CHIAKI_ERR_SUCCESS)
 	{
 		CHIAKI_LOGE(gkcrypt->log, "GKCrypt failed to generate key and IV");
@@ -116,7 +116,7 @@ CHIAKI_EXPORT void chiaki_gkcrypt_fini(ChiakiGKCrypt *gkcrypt)
 #endif
 }
 
-static ChiakiErrorCode gkcrypt_gen_key_iv(ChiakiGKCrypt *gkcrypt, uint8_t index, const uint8_t *handshake_key, const uint8_t *ecdh_secret)
+static ChiakiErrorCode gkcrypt_gen_key_iv(ChiakiGKCrypt *gkcrypt, uint8_t index, const uint8_t *handshake_key, const uint8_t *ecdh_secret, size_t ecdh_secret_size)
 {
 	uint8_t data[3 + CHIAKI_HANDSHAKE_KEY_SIZE + 2];
 	data[0] = 1;
@@ -129,10 +129,10 @@ static ChiakiErrorCode gkcrypt_gen_key_iv(ChiakiGKCrypt *gkcrypt, uint8_t index,
 	uint8_t hmac[CHIAKI_GKCRYPT_BLOCK_SIZE*2];
 	size_t hmac_size = sizeof(hmac);
 #ifdef CHIAKI_LIB_ENABLE_LIBNX_CRYPTO
-	hmacSha256CalculateMac(hmac, ecdh_secret, CHIAKI_ECDH_SECRET_SIZE, data, sizeof(data));
+	hmacSha256CalculateMac(hmac, ecdh_secret, ecdh_secret_size, data, sizeof(data));
 
 #else
-	if(!HMAC(EVP_sha256(), ecdh_secret, CHIAKI_ECDH_SECRET_SIZE, data, sizeof(data), hmac, (unsigned int *)&hmac_size))
+	if(!HMAC(EVP_sha256(), ecdh_secret, ecdh_secret_size, data, sizeof(data), hmac, (unsigned int *)&hmac_size))
 		return CHIAKI_ERR_UNKNOWN;
 
 #endif

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: LicenseRef-AGPL-3.0-only-OpenSSL
 
 #include <chiaki/audioreceiver.h>
+#include <chiaki/akira/takion_profile.h>
 #include <chiaki/session.h>
 #include "cloud/pscloud_audio_reassembler.h"
 
@@ -28,8 +29,11 @@ static void pscloud_audio_reassembler_frame_cb(ChiakiSeqNum16 frame_index, uint8
 CHIAKI_EXPORT ChiakiErrorCode chiaki_audio_receiver_init(ChiakiAudioReceiver *audio_receiver, ChiakiSession *session, ChiakiPacketStats *packet_stats)
 {
 	audio_receiver->session = session;
+	audio_receiver->kind = CHIAKI_AUDIO_RECEIVER_KIND_AUDIO;
 	audio_receiver->log = session->log;
 	audio_receiver->packet_stats = packet_stats;
+	audio_receiver->takion_version = 12;
+	audio_receiver->unit_size_mismatch_logged = false;
 
 	audio_receiver->frame_index_prev = 0;
 	audio_receiver->next_frame_index = 0;
@@ -59,6 +63,13 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_audio_receiver_init(ChiakiAudioReceiver *au
 	}
 
 	return CHIAKI_ERR_SUCCESS;
+}
+
+CHIAKI_EXPORT void chiaki_audio_receiver_set_takion_version(ChiakiAudioReceiver *audio_receiver, unsigned int version)
+{
+	if(!audio_receiver)
+		return;
+	audio_receiver->takion_version = version;
 }
 
 CHIAKI_EXPORT void chiaki_audio_receiver_fini(ChiakiAudioReceiver *audio_receiver)
@@ -134,23 +145,42 @@ CHIAKI_EXPORT void chiaki_audio_receiver_av_packet(ChiakiAudioReceiver *audio_re
 		return;
 	}
 
-	uint8_t source_units_count = chiaki_takion_av_packet_audio_source_units_count(packet);
-	uint8_t fec_units_count = chiaki_takion_av_packet_audio_fec_units_count(packet);
-	uint8_t unit_size = chiaki_takion_av_packet_audio_unit_size(packet);
-
 	if(!packet->data_size)
 	{
 		CHIAKI_LOGE(audio_receiver->log, "Audio AV Packet is empty");
 		return;
 	}
 
-	if((uint16_t)fec_units_count + (uint16_t)source_units_count != packet->units_in_frame_total)
+	ChiakiAkiraAudioUnits units;
+	ChiakiErrorCode units_err = chiaki_akira_audio_units_decode(audio_receiver->takion_version,
+		packet->units_in_frame_fec, packet->units_in_frame_total, packet->data_size, &units);
+	if(units_err != CHIAKI_ERR_SUCCESS)
+	{
+		CHIAKI_LOGE(audio_receiver->log, "Audio AV Packet units undecodable (takion v%u, fec word %#x, total %u, size %#llx)",
+			audio_receiver->takion_version, (unsigned int)packet->units_in_frame_fec,
+			(unsigned int)packet->units_in_frame_total, (unsigned long long)packet->data_size);
+		return;
+	}
+
+	uint16_t source_units_count = units.source_units_count;
+	uint16_t fec_units_count = units.fec_units_count;
+	size_t unit_size = units.unit_size;
+
+	if(unit_size != units.unit_size_derived && !audio_receiver->unit_size_mismatch_logged)
+	{
+		audio_receiver->unit_size_mismatch_logged = true;
+		CHIAKI_LOGW(audio_receiver->log, "Audio AV Packet unit size %#llx disagrees with derived %#llx (takion v%u)",
+			(unsigned long long)unit_size, (unsigned long long)units.unit_size_derived,
+			audio_receiver->takion_version);
+	}
+
+	if(fec_units_count + source_units_count != packet->units_in_frame_total)
 	{
 		CHIAKI_LOGE(audio_receiver->log, "Source Units + FEC Units != Total Units in Audio AV Packet");
 		return;
 	}
 
-	if(packet->data_size != (size_t)unit_size * (size_t)packet->units_in_frame_total)
+	if(packet->data_size != unit_size * (size_t)packet->units_in_frame_total)
 	{
 		CHIAKI_LOGE(audio_receiver->log, "Audio AV Packet size mismatch %#llx vs %#llx",
 			(unsigned long long)packet->data_size,

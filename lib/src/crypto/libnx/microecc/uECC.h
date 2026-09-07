@@ -83,6 +83,12 @@ the same endianness. */
 #ifndef uECC_SUPPORTS_secp256k1
     #define uECC_SUPPORTS_secp256k1 1
 #endif
+/* Off in this instantiation on purpose: uECC_MAX_WORDS is shared by every curve
+   in a translation unit, so enabling secp521r1 here would resize the buffers the
+   256-bit curves use. secp521r1 lives in uECC_p521.c instead. */
+#ifndef uECC_SUPPORTS_secp521r1
+    #define uECC_SUPPORTS_secp521r1 0
+#endif
 
 /* Specifies whether compressed point format is supported.
    Set to 0 to disable point compression/decompression functions. */
@@ -112,6 +118,9 @@ uECC_Curve uECC_secp256r1(void);
 #endif
 #if uECC_SUPPORTS_secp256k1
 uECC_Curve uECC_secp256k1(void);
+#endif
+#if uECC_SUPPORTS_secp521r1
+uECC_Curve uECC_secp521r1(void);
 #endif
 
 /* uECC_RNG_Function type

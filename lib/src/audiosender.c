@@ -4,6 +4,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <chiaki/fec.h>
+#include <chiaki/akira/takion_profile.h>
 
 static void chiaki_audio_sender_frame(ChiakiAudioSender *audio_sender, uint8_t *buf, size_t buf_size);
 CHIAKI_EXPORT ChiakiErrorCode chiaki_audio_sender_init(ChiakiAudioSender *audio_sender, ChiakiLog *log, ChiakiSession *session)
@@ -20,7 +21,7 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_audio_sender_init(ChiakiAudioSender *audio_
     audio_sender->frame_buf = malloc(audio_sender->frame_buf_size);
     if(!audio_sender->frame_buf)
         return CHIAKI_ERR_MEMORY;
-    audio_sender->filled_packet_buf = malloc(audio_sender->frame_buf_size + 20);
+    audio_sender->filled_packet_buf = malloc(audio_sender->frame_buf_size + 20 + CHIAKI_AKIRA_TAKION_EXT_HEADER_SIZE);
     if(!audio_sender->filled_packet_buf)
     {
         free(audio_sender->frame_buf);
@@ -64,6 +65,8 @@ CHIAKI_EXPORT void chiaki_audio_sender_opus_data(ChiakiAudioSender *audio_sender
     uint32_t unit_index = 0;
     uint32_t units_in_frame_total = 3;
     uint32_t units_in_frame_fec_raw = 10273;
+    if(chiaki_akira_takion_feature_supported(CHIAKI_AKIRA_TAKION_FEATURE_AV_UNIT_COUNT_ONLY, audio_sender->takion->version))
+        units_in_frame_fec_raw = CHIAKI_AKIRA_AV_UNIT_SOURCE_FLAG | (10273 & 0xf);
     uint32_t units_number = htonl((units_in_frame_fec_raw & 0xffff) | (((units_in_frame_total - 1) & 0xff) << 0x10) | ((unit_index & 0xff) << 0x18));
     uint32_t key_pos = htonl(0);
     uint8_t codec = 5;

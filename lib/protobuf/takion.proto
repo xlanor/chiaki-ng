@@ -459,3 +459,21 @@ message SenkushaClientMtuCommand {
     required bool state = 3;
     optional uint32 mtu_down = 4;
 }
+
+message RttPayload {
+    optional bool ping = 1;
+    optional uint32 entry_index = 2;
+    optional sint64 orig_send_timestamp_us = 3;
+}
+
+message ExtMessage {
+    enum PayloadType {
+        RTT = 0;
+        CLIENTMETRIC = 1;
+        WIFIMETRICS = 2;
+        CONGESTIONCONTROLCOORDINATOR = 3;
+    }
+
+    required PayloadType type = 1;
+    optional RttPayload rtt_payload = 2;
+}
