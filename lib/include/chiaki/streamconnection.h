@@ -20,6 +20,8 @@ extern "C" {
 
 typedef struct chiaki_session_t ChiakiSession;
 
+#define CHIAKI_STREAM_CONNECTION_RTT_WINDOW 16
+
 typedef enum chiaki_dualsense_effect_intensity_t
 {
 	Off = 0,
@@ -80,6 +82,15 @@ typedef struct chiaki_stream_connection_t
 	char *remote_disconnect_reason;
 
 	double measured_bitrate;
+
+	double rtt_ms;
+	double rtt_samples[CHIAKI_STREAM_CONNECTION_RTT_WINDOW];
+	size_t rtt_sample_count;
+
+	uint64_t console_loss;
+	float upstream_loss;
+	uint32_t target_bitrate;
+	bool console_quality_valid;
 } ChiakiStreamConnection;
 
 CHIAKI_EXPORT ChiakiErrorCode chiaki_stream_connection_init(ChiakiStreamConnection *stream_connection, ChiakiSession *session, double packet_loss_max);

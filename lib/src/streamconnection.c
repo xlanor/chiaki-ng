@@ -46,6 +46,38 @@ typedef enum {
 
 void chiaki_session_send_event(ChiakiSession *session, ChiakiEvent *event);
 
+static void stream_connection_handle_data_ack(ChiakiStreamConnection *stream_connection, uint64_t rtt_ms)
+{
+	if(rtt_ms == 0)
+		return;
+
+	double sample = (double)rtt_ms;
+	if(sample > 2000.0)
+		return;
+
+	if(sample < 0.5)
+		sample = 0.5;
+
+	if(stream_connection->rtt_sample_count < CHIAKI_STREAM_CONNECTION_RTT_WINDOW)
+	{
+		stream_connection->rtt_samples[stream_connection->rtt_sample_count++] = sample;
+	}
+	else
+	{
+		memmove(stream_connection->rtt_samples, stream_connection->rtt_samples + 1,
+				(CHIAKI_STREAM_CONNECTION_RTT_WINDOW - 1) * sizeof(double));
+		stream_connection->rtt_samples[CHIAKI_STREAM_CONNECTION_RTT_WINDOW - 1] = sample;
+	}
+
+	double min_sample = stream_connection->rtt_samples[0];
+	for(size_t i = 1; i < stream_connection->rtt_sample_count; ++i)
+	{
+		if(stream_connection->rtt_samples[i] < min_sample)
+			min_sample = stream_connection->rtt_samples[i];
+	}
+	stream_connection->rtt_ms = min_sample;
+}
+
 static void stream_connection_takion_cb(ChiakiTakionEvent *event, void *user);
 static void stream_connection_takion_data(ChiakiStreamConnection *stream_connection, ChiakiTakionMessageDataType data_type, uint8_t *buf, size_t buf_size);
 static void stream_connection_takion_data_protobuf(ChiakiStreamConnection *stream_connection, uint8_t *buf, size_t buf_size);
@@ -80,6 +112,15 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_stream_connection_init(ChiakiStreamConnecti
 
 	stream_connection->haptic_intensity = Strong;
 	stream_connection->trigger_intensity = Strong;
+
+	stream_connection->measured_bitrate = 0.0;
+	stream_connection->rtt_ms = 0.0;
+	stream_connection->rtt_sample_count = 0;
+	memset(stream_connection->rtt_samples, 0, sizeof(stream_connection->rtt_samples));
+	stream_connection->console_loss = 0;
+	stream_connection->upstream_loss = 0.0f;
+	stream_connection->target_bitrate = 0;
+	stream_connection->console_quality_valid = false;
 
 	ChiakiErrorCode err = chiaki_mutex_init(&stream_connection->state_mutex, false);
 	if(err != CHIAKI_ERR_SUCCESS)
@@ -446,6 +487,9 @@ static void stream_connection_takion_cb(ChiakiTakionEvent *event, void *user)
 		case CHIAKI_TAKION_EVENT_TYPE_AV:
 			stream_connection_takion_av(stream_connection, event->av);
 			break;
+		case CHIAKI_TAKION_EVENT_TYPE_DATA_ACK:
+			stream_connection_handle_data_ack(stream_connection, event->data_ack.rtt_ms);
+			break;
 		default:
 			break;
 	}
@@ -745,6 +789,13 @@ static void stream_connection_takion_data_idle(ChiakiStreamConnection *stream_co
 			 q.target_bitrate, q.upstream_bitrate,
 			 q.upstream_loss,
 			 q.disable_upstream_audio, q.rtt, q.loss);
+		if(q.has_loss)
+			stream_connection->console_loss = q.loss;
+		if(q.has_upstream_loss)
+			stream_connection->upstream_loss = q.upstream_loss;
+		if(q.has_target_bitrate)
+			stream_connection->target_bitrate = q.target_bitrate;
+		stream_connection->console_quality_valid = true;
 		stream_connection->measured_bitrate = chiaki_stream_stats_bitrate(&stream_connection->video_receiver->frame_processor.stream_stats, stream_connection->session->connect_info.video_profile.max_fps) / 1000000.0;
 		CHIAKI_LOGV(stream_connection->log, "StreamConnection measured bitrate: %.4f MBit/s", stream_connection->measured_bitrate);
 		chiaki_stream_stats_reset(&stream_connection->video_receiver->frame_processor.stream_stats);
