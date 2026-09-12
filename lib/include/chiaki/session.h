@@ -73,6 +73,8 @@ typedef enum {
 CHIAKI_EXPORT void chiaki_connect_video_profile_preset(ChiakiConnectVideoProfile *profile, ChiakiVideoResolutionPreset resolution, ChiakiVideoFPSPreset fps);
 
 #define CHIAKI_SESSION_AUTH_SIZE 0x10
+#define CHIAKI_COUCH_ACCOUNT_ID_SIZE 24
+#define CHIAKI_COUCH_JOIN_BLOB_SIZE 64
 
 typedef struct chiaki_connect_info_t
 {
@@ -101,6 +103,7 @@ typedef struct chiaki_connect_info_t
 	uint64_t cloud_rtt_us;
 	bool enable_idr_on_fec_failure;
 	unsigned int takion_version_override;
+	char couch_account_id[CHIAKI_COUCH_MAX_PADS][CHIAKI_COUCH_ACCOUNT_ID_SIZE];
 } ChiakiConnectInfo;
 
 
@@ -149,6 +152,7 @@ typedef struct chiaki_rumble_event_t
 	uint8_t unknown;
 	uint8_t left; // low-frequency
 	uint8_t right; // high-frequency
+	uint8_t player_index;
 } ChiakiRumbleEvent;
 
 typedef struct chiaki_trigger_effects_event_t
@@ -157,6 +161,7 @@ typedef struct chiaki_trigger_effects_event_t
 	uint8_t type_right;
 	uint8_t left[10];
 	uint8_t right[10];
+	uint8_t player_index;
 } ChiakiTriggerEffectsEvent;
 
 typedef struct chiaki_video_fec_failure_event_t
@@ -183,6 +188,12 @@ typedef enum {
 	CHIAKI_EVENT_HAPTIC_INTENSITY,
 	CHIAKI_EVENT_TRIGGER_INTENSITY,
 	CHIAKI_EVENT_VIDEO_FEC_FAILURE,
+	CHIAKI_EVENT_PAD_CONFIRMED,
+	CHIAKI_EVENT_PAD_PASSCODE_REQUEST,
+	CHIAKI_EVENT_PAD_JOIN_FAILED,
+	CHIAKI_EVENT_PAD_ANNOUNCED,
+	CHIAKI_EVENT_PAD_DROPPED,
+	CHIAKI_EVENT_PAD_AUTHORIZATION_REQUIRED,
 } ChiakiEventType;
 
 typedef struct chiaki_event_t
@@ -197,6 +208,26 @@ typedef struct chiaki_event_t
 		ChiakiTriggerEffectsEvent trigger_effects;
 		uint8_t led_state[0x3];
 		uint8_t player_index;
+		struct
+		{
+			uint8_t index;
+			uint8_t led[0x3];
+		} pad_confirmed;
+		struct
+		{
+			uint8_t index;
+			bool retry;
+		} pad_passcode_request;
+		struct
+		{
+			uint8_t index;
+			uint8_t status;
+		} pad_join_failed;
+		struct
+		{
+			uint8_t index;
+			char user_code[CHIAKI_COUCH_USER_CODE_LENGTH + 1];
+		} pad_authorization_required;
 		struct
 		{
 			bool pin_incorrect; // false on first request, true if the pin entered before was incorrect
@@ -240,6 +271,7 @@ typedef struct chiaki_session_t
 		uint8_t psn_account_id[CHIAKI_PSN_ACCOUNT_ID_SIZE];
 		bool enable_idr_on_fec_failure;
 		unsigned int takion_version_override;
+		char couch_account_id[CHIAKI_COUCH_MAX_PADS][CHIAKI_COUCH_ACCOUNT_ID_SIZE];
 	} connect_info;
 
 	ChiakiTarget target;
@@ -295,7 +327,8 @@ typedef struct chiaki_session_t
 
 	ChiakiStreamConnection stream_connection;
 
-	ChiakiControllerState controller_state;
+	ChiakiControllerState controller_state[CHIAKI_COUCH_MAX_PADS];
+	uint8_t pad_count;
 } ChiakiSession;
 
 CHIAKI_EXPORT ChiakiErrorCode chiaki_session_init(ChiakiSession *session, ChiakiConnectInfo *connect_info, ChiakiLog *log);
@@ -310,6 +343,20 @@ CHIAKI_EXPORT void chiaki_session_send_event(ChiakiSession *session, ChiakiEvent
 
 CHIAKI_EXPORT ChiakiErrorCode chiaki_session_request_idr(ChiakiSession *session);
 CHIAKI_EXPORT ChiakiErrorCode chiaki_session_set_controller_state(ChiakiSession *session, ChiakiControllerState *state);
+CHIAKI_EXPORT ChiakiErrorCode chiaki_session_set_controller_state_for_pad(ChiakiSession *session, uint8_t pad, ChiakiControllerState *state);
+CHIAKI_EXPORT ChiakiErrorCode chiaki_session_set_pad_count(ChiakiSession *session, uint8_t pad_count);
+CHIAKI_EXPORT ChiakiErrorCode chiaki_session_couch_send_user_join(ChiakiSession *session, uint8_t pad);
+CHIAKI_EXPORT ChiakiErrorCode chiaki_session_couch_set_account_id(ChiakiSession *session, uint8_t pad, const char *account_id);
+CHIAKI_EXPORT ChiakiErrorCode chiaki_session_couch_send_pad_join(ChiakiSession *session, uint8_t pad, uint8_t controller_type);
+CHIAKI_EXPORT ChiakiErrorCode chiaki_session_couch_send_leave(ChiakiSession *session, uint8_t pad);
+CHIAKI_EXPORT ChiakiErrorCode chiaki_session_couch_send_presence(ChiakiSession *session, uint8_t pad, bool present);
+CHIAKI_EXPORT ChiakiErrorCode chiaki_session_couch_send_passcode(ChiakiSession *session, uint8_t pad, const char *passcode);
+CHIAKI_EXPORT ChiakiErrorCode chiaki_session_couch_announce_pads(ChiakiSession *session);
+CHIAKI_EXPORT ChiakiErrorCode chiaki_session_couch_open_pad(ChiakiSession *session, uint8_t pad, uint8_t controller_type);
+CHIAKI_EXPORT ChiakiErrorCode chiaki_session_couch_accept_pad(ChiakiSession *session, uint8_t pad);
+CHIAKI_EXPORT ChiakiErrorCode chiaki_session_couch_close_pad(ChiakiSession *session, uint8_t pad);
+CHIAKI_EXPORT ChiakiErrorCode chiaki_session_couch_join_ps4(ChiakiSession *session, uint8_t pad, uint8_t controller_type);
+CHIAKI_EXPORT ChiakiErrorCode chiaki_session_couch_leave_ps4(ChiakiSession *session, uint8_t pad);
 CHIAKI_EXPORT ChiakiErrorCode chiaki_session_set_login_pin(ChiakiSession *session, const uint8_t *pin, size_t pin_size);
 CHIAKI_EXPORT ChiakiErrorCode chiaki_session_set_stream_connection_switch_received(ChiakiSession *session);
 CHIAKI_EXPORT ChiakiErrorCode chiaki_session_goto_bed(ChiakiSession *session);

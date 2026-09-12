@@ -61,6 +61,11 @@ typedef struct chiaki_ctrl_t
 	uint32_t keyboard_text_counter;
 } ChiakiCtrl;
 
+#define CHIAKI_COUCH_USER_CODE_LENGTH 22
+
+CHIAKI_EXPORT bool chiaki_ctrl_couch_parse_user_code(const uint8_t *payload, size_t payload_size,
+	uint8_t *pad, char user_code[CHIAKI_COUCH_USER_CODE_LENGTH + 1]);
+
 CHIAKI_EXPORT ChiakiErrorCode chiaki_ctrl_init(ChiakiCtrl *ctrl, struct chiaki_session_t *session);
 CHIAKI_EXPORT ChiakiErrorCode chiaki_ctrl_start(ChiakiCtrl *ctrl);
 CHIAKI_EXPORT void chiaki_ctrl_stop(ChiakiCtrl *ctrl);

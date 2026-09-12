@@ -336,7 +336,9 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_session_init(ChiakiSession *session, Chiaki
 		memcpy(session->connect_info.morning, connect_info->morning, sizeof(session->connect_info.morning));
 	}
 
-	chiaki_controller_state_set_idle(&session->controller_state);
+	for(uint8_t pad = 0; pad < CHIAKI_COUCH_MAX_PADS; pad++)
+		chiaki_controller_state_set_idle(&session->controller_state[pad]);
+	session->pad_count = 1;
 
 	session->connect_info.ps5 = connect_info->ps5;
 	const uint8_t did_prefix[] = { 0x00, 0x18, 0x00, 0x00, 0x00, 0x07, 0x00, 0x40, 0x00, 0x80 };
@@ -355,6 +357,11 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_session_init(ChiakiSession *session, Chiaki
 	session->connect_info.enable_dualsense = connect_info->enable_dualsense;
 	session->connect_info.enable_idr_on_fec_failure = connect_info->enable_idr_on_fec_failure;
 	session->connect_info.takion_version_override = connect_info->takion_version_override;
+	for(uint8_t pad = 0; pad < CHIAKI_COUCH_MAX_PADS; pad++)
+	{
+		strncpy(session->connect_info.couch_account_id[pad], connect_info->couch_account_id[pad], CHIAKI_COUCH_ACCOUNT_ID_SIZE - 1);
+		session->connect_info.couch_account_id[pad][CHIAKI_COUCH_ACCOUNT_ID_SIZE - 1] = '\0';
+	}
 
 	return CHIAKI_ERR_SUCCESS;
 
@@ -402,6 +409,114 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_session_start(ChiakiSession *session)
 	return err;
 }
 
+#define CHIAKI_COUCH_CTRL_MESSAGE_TYPE_PAD_JOIN 0x08
+#define CHIAKI_COUCH_CTRL_MESSAGE_TYPE_USER_JOIN 0x68
+#define CHIAKI_COUCH_CTRL_MESSAGE_TYPE_LEAVE 0x09
+#define CHIAKI_COUCH_CTRL_MESSAGE_TYPE_PASSCODE_REP 0x8064
+#define CHIAKI_COUCH_CONTROLLER_TYPE_GAMEPAD 3
+#define CHIAKI_COUCH_LOCAL_TYPE_DUALSHOCK4 3
+
+CHIAKI_EXPORT ChiakiErrorCode chiaki_session_couch_set_account_id(ChiakiSession *session, uint8_t pad, const char *account_id)
+{
+	if(!session || !account_id || pad == 0 || pad >= CHIAKI_COUCH_MAX_PADS)
+		return CHIAKI_ERR_INVALID_DATA;
+
+	size_t encoded_size = strlen(account_id);
+	if(encoded_size == 0 || encoded_size >= CHIAKI_COUCH_ACCOUNT_ID_SIZE)
+		return CHIAKI_ERR_INVALID_DATA;
+
+	uint8_t decoded[CHIAKI_PSN_ACCOUNT_ID_SIZE];
+	size_t decoded_size = sizeof(decoded);
+	ChiakiErrorCode err = chiaki_base64_decode(account_id, encoded_size, decoded, &decoded_size);
+	if(err != CHIAKI_ERR_SUCCESS || decoded_size != sizeof(decoded))
+		return CHIAKI_ERR_INVALID_DATA;
+
+	memcpy(session->connect_info.couch_account_id[pad], account_id, encoded_size + 1);
+	return CHIAKI_ERR_SUCCESS;
+}
+
+CHIAKI_EXPORT ChiakiErrorCode chiaki_session_couch_send_user_join(ChiakiSession *session, uint8_t pad)
+{
+	if(!session || pad == 0 || pad >= CHIAKI_COUCH_MAX_PADS)
+		return CHIAKI_ERR_INVALID_DATA;
+
+	const char *account_id = session->connect_info.couch_account_id[pad];
+	if(!account_id[0])
+	{
+		CHIAKI_LOGE(session->log, "Couch: pad %u has no PSN account id configured, cannot join", (unsigned)pad);
+		return CHIAKI_ERR_INVALID_DATA;
+	}
+
+	uint8_t payload[16];
+	memset(payload, 0, sizeof(payload));
+
+	size_t account_id_size = CHIAKI_PSN_ACCOUNT_ID_SIZE;
+	ChiakiErrorCode err = chiaki_base64_decode(account_id, strlen(account_id), payload, &account_id_size);
+	if(err != CHIAKI_ERR_SUCCESS || account_id_size != CHIAKI_PSN_ACCOUNT_ID_SIZE)
+	{
+		CHIAKI_LOGE(session->log, "Couch: pad %u has an invalid base64 account id", (unsigned)pad);
+		return CHIAKI_ERR_INVALID_DATA;
+	}
+
+	payload[8] = pad;
+	payload[9] = CHIAKI_COUCH_CONTROLLER_TYPE_GAMEPAD;
+
+	CHIAKI_LOGI(session->log, "Couch: sending user join (ctrl 0x0068) for pad %u", (unsigned)pad);
+	return chiaki_ctrl_send_message(&session->ctrl, CHIAKI_COUCH_CTRL_MESSAGE_TYPE_USER_JOIN, payload, sizeof(payload));
+}
+
+CHIAKI_EXPORT ChiakiErrorCode chiaki_session_couch_send_pad_join(ChiakiSession *session, uint8_t pad, uint8_t controller_type)
+{
+	if(!session || pad == 0 || pad >= CHIAKI_COUCH_MAX_PADS)
+		return CHIAKI_ERR_INVALID_DATA;
+
+	uint8_t payload[2];
+	payload[0] = pad;
+	payload[1] = controller_type ? controller_type : CHIAKI_COUCH_LOCAL_TYPE_DUALSHOCK4;
+
+	CHIAKI_LOGI(session->log, "Couch: sending pad join (ctrl 0x0008) for pad %u, local controller type %u",
+		(unsigned)pad, (unsigned)payload[1]);
+	return chiaki_ctrl_send_message(&session->ctrl, CHIAKI_COUCH_CTRL_MESSAGE_TYPE_PAD_JOIN, payload, sizeof(payload));
+}
+
+CHIAKI_EXPORT ChiakiErrorCode chiaki_session_couch_send_leave(ChiakiSession *session, uint8_t pad)
+{
+	if(!session || pad == 0 || pad >= CHIAKI_COUCH_MAX_PADS)
+		return CHIAKI_ERR_INVALID_DATA;
+
+	uint8_t payload = pad;
+	CHIAKI_LOGI(session->log, "Couch: sending leave (ctrl 0x0009) for pad %u", (unsigned)pad);
+	return chiaki_ctrl_send_message(&session->ctrl, CHIAKI_COUCH_CTRL_MESSAGE_TYPE_LEAVE, &payload, sizeof(payload));
+}
+
+CHIAKI_EXPORT ChiakiErrorCode chiaki_session_couch_send_passcode(ChiakiSession *session, uint8_t pad, const char *passcode)
+{
+	if(!session || pad == 0 || pad >= CHIAKI_COUCH_MAX_PADS || !passcode)
+		return CHIAKI_ERR_INVALID_DATA;
+
+	if(strlen(passcode) != 4)
+	{
+		CHIAKI_LOGE(session->log, "Couch: passcode for pad %u must be exactly 4 digits", (unsigned)pad);
+		return CHIAKI_ERR_INVALID_DATA;
+	}
+	for(size_t i = 0; i < 4; i++)
+	{
+		if(passcode[i] < '0' || passcode[i] > '9')
+		{
+			CHIAKI_LOGE(session->log, "Couch: passcode for pad %u must be ASCII digits", (unsigned)pad);
+			return CHIAKI_ERR_INVALID_DATA;
+		}
+	}
+
+	uint8_t payload[8];
+	memset(payload, 0, sizeof(payload));
+	payload[0] = pad;
+	memcpy(payload + 1, passcode, 4);
+
+	CHIAKI_LOGI(session->log, "Couch: sending passcode answer (ctrl 0x8064) for pad %u", (unsigned)pad);
+	return chiaki_ctrl_send_message(&session->ctrl, CHIAKI_COUCH_CTRL_MESSAGE_TYPE_PASSCODE_REP, payload, sizeof(payload));
+}
+
 CHIAKI_EXPORT unsigned int chiaki_session_takion_version(ChiakiSession *session)
 {
 	unsigned int base = chiaki_service_type_is_cloud(session->service_type)
@@ -445,13 +560,28 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_session_request_idr(ChiakiSession *session)
 
 CHIAKI_EXPORT ChiakiErrorCode chiaki_session_set_controller_state(ChiakiSession *session, ChiakiControllerState *state)
 {
+	return chiaki_session_set_controller_state_for_pad(session, 0, state);
+}
+
+CHIAKI_EXPORT ChiakiErrorCode chiaki_session_set_controller_state_for_pad(ChiakiSession *session, uint8_t pad, ChiakiControllerState *state)
+{
+	if(pad >= CHIAKI_COUCH_MAX_PADS)
+		return CHIAKI_ERR_INVALID_DATA;
 	ChiakiErrorCode err = chiaki_mutex_lock(&session->stream_connection.feedback_sender_mutex);
 	if(err != CHIAKI_ERR_SUCCESS)
 		return err;
-	session->controller_state = *state;
-	if(session->stream_connection.feedback_sender_active)
-		chiaki_feedback_sender_set_controller_state(&session->stream_connection.feedback_sender, &session->controller_state);
+	session->controller_state[pad] = *state;
+	if(session->stream_connection.feedback_sender_active[pad])
+		chiaki_feedback_sender_set_controller_state(&session->stream_connection.feedback_sender[pad], &session->controller_state[pad]);
 	chiaki_mutex_unlock(&session->stream_connection.feedback_sender_mutex);
+	return CHIAKI_ERR_SUCCESS;
+}
+
+CHIAKI_EXPORT ChiakiErrorCode chiaki_session_set_pad_count(ChiakiSession *session, uint8_t pad_count)
+{
+	if(pad_count < 1 || pad_count > CHIAKI_COUCH_MAX_PADS)
+		return CHIAKI_ERR_INVALID_DATA;
+	session->pad_count = pad_count;
 	return CHIAKI_ERR_SUCCESS;
 }
 

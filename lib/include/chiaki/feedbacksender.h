@@ -21,12 +21,15 @@ typedef struct chiaki_feedback_sender_t
 	ChiakiTakion *takion;
 	ChiakiThread thread;
 
+	uint8_t controller_id;
+
 	ChiakiSeqNum16 state_seq_num;
 
 	ChiakiSeqNum16 history_seq_num;
 	ChiakiFeedbackHistoryBuffer history_buf;
 	uint8_t history_packets[CHIAKI_FEEDBACK_HISTORY_PACKET_QUEUE_SIZE][CHIAKI_FEEDBACK_HISTORY_PACKET_BUF_SIZE];
 	size_t history_packet_sizes[CHIAKI_FEEDBACK_HISTORY_PACKET_QUEUE_SIZE];
+	uint8_t history_packet_event_counts[CHIAKI_FEEDBACK_HISTORY_PACKET_QUEUE_SIZE];
 	size_t history_packet_begin;
 	size_t history_packet_len;
 	size_t history_repeats_left;
@@ -42,8 +45,9 @@ typedef struct chiaki_feedback_sender_t
 	ChiakiCond state_cond;
 } ChiakiFeedbackSender;
 
-CHIAKI_EXPORT ChiakiErrorCode chiaki_feedback_sender_init(ChiakiFeedbackSender *feedback_sender, ChiakiTakion *takion);
+CHIAKI_EXPORT ChiakiErrorCode chiaki_feedback_sender_init(ChiakiFeedbackSender *feedback_sender, ChiakiTakion *takion, uint8_t controller_id);
 CHIAKI_EXPORT void chiaki_feedback_sender_fini(ChiakiFeedbackSender *feedback_sender);
+CHIAKI_EXPORT ChiakiErrorCode chiaki_feedback_sender_push_presence(ChiakiFeedbackSender *feedback_sender, bool present);
 CHIAKI_EXPORT ChiakiErrorCode chiaki_feedback_sender_set_controller_state(ChiakiFeedbackSender *feedback_sender, ChiakiControllerState *state);
 
 #ifdef __cplusplus

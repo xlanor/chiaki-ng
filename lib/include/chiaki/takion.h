@@ -187,6 +187,8 @@ typedef struct chiaki_takion_t
 
 	ChiakiSeqNum32 seq_num_local;
 	ChiakiMutex seq_num_local_mutex;
+	ChiakiSeqNum16 feedback_state_seq_num;
+	ChiakiSeqNum16 feedback_history_seq_num;
 
 	/**
 	 * Advertised Receiver Window Credit
@@ -260,13 +262,17 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_send_congestion(ChiakiTakion *takion
 /**
  * Thread-safe while Takion is running.
  */
-CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_send_feedback_state(ChiakiTakion *takion, ChiakiSeqNum16 seq_num, ChiakiFeedbackState *feedback_state);
+CHIAKI_EXPORT void chiaki_takion_feedback_header_format(uint8_t *buf, uint8_t packet_type, ChiakiSeqNum16 seq_num, uint8_t event_count);
+CHIAKI_EXPORT ChiakiSeqNum16 chiaki_takion_next_feedback_state_seq(ChiakiTakion *takion);
+CHIAKI_EXPORT ChiakiSeqNum16 chiaki_takion_next_feedback_history_seq(ChiakiTakion *takion);
+
+CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_send_feedback_state(ChiakiTakion *takion, ChiakiSeqNum16 seq_num, uint8_t controller_id, ChiakiFeedbackState *feedback_state);
 
 CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_send_mic_packet(ChiakiTakion *takion, uint8_t *audio_packet, size_t packet_size, bool ps5);
 /**
  * Thread-safe while Takion is running.
  */
-CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_send_feedback_history(ChiakiTakion *takion, ChiakiSeqNum16 seq_num, uint8_t *payload, size_t payload_size);
+CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_send_feedback_history(ChiakiTakion *takion, ChiakiSeqNum16 seq_num, uint8_t controller_id, uint8_t event_count, uint8_t *payload, size_t payload_size);
 
 #define CHIAKI_TAKION_V9_AV_HEADER_SIZE_VIDEO 0x17
 #define CHIAKI_TAKION_V9_AV_HEADER_SIZE_AUDIO 0x12

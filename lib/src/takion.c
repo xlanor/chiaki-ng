@@ -279,6 +279,8 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_connect(ChiakiTakion *takion, Chiaki
 
 	takion->tag_local = chiaki_random_32(); // 0x4823
 	takion->seq_num_local = takion->tag_local;
+	takion->feedback_state_seq_num = 0;
+	takion->feedback_history_seq_num = 0;
 	ret = chiaki_mutex_init(&takion->seq_num_local_mutex, false);
 	if(ret != CHIAKI_ERR_SUCCESS)
 		goto error_gkcrypt_local_mutex;
@@ -840,14 +842,37 @@ beach:
 	return err;
 }
 
-CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_send_feedback_state(ChiakiTakion *takion, ChiakiSeqNum16 seq_num, ChiakiFeedbackState *feedback_state)
+CHIAKI_EXPORT ChiakiSeqNum16 chiaki_takion_next_feedback_state_seq(ChiakiTakion *takion)
+{
+	ChiakiSeqNum16 v;
+	chiaki_mutex_lock(&takion->seq_num_local_mutex);
+	v = takion->feedback_state_seq_num++;
+	chiaki_mutex_unlock(&takion->seq_num_local_mutex);
+	return v;
+}
+
+CHIAKI_EXPORT ChiakiSeqNum16 chiaki_takion_next_feedback_history_seq(ChiakiTakion *takion)
+{
+	ChiakiSeqNum16 v;
+	chiaki_mutex_lock(&takion->seq_num_local_mutex);
+	v = takion->feedback_history_seq_num++;
+	chiaki_mutex_unlock(&takion->seq_num_local_mutex);
+	return v;
+}
+
+CHIAKI_EXPORT void chiaki_takion_feedback_header_format(uint8_t *buf, uint8_t packet_type, ChiakiSeqNum16 seq_num, uint8_t event_count)
+{
+	buf[0] = packet_type;
+	*((chiaki_unaligned_uint16_t *)(buf + 1)) = htons(seq_num);
+	buf[3] = event_count;
+	*((chiaki_unaligned_uint32_t *)(buf + 4)) = 0;
+	*((chiaki_unaligned_uint32_t *)(buf + 8)) = 0;
+}
+
+CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_send_feedback_state(ChiakiTakion *takion, ChiakiSeqNum16 seq_num, uint8_t controller_id, ChiakiFeedbackState *feedback_state)
 {
 	uint8_t buf[0xc + CHIAKI_FEEDBACK_STATE_BUF_SIZE_MAX + CHIAKI_AKIRA_TAKION_EXT_HEADER_SIZE + TAKION_PSN_WRAPPER_SIZE];
-	buf[0] = TAKION_PACKET_TYPE_FEEDBACK_STATE;
-	*((chiaki_unaligned_uint16_t *)(buf + 1)) = htons(seq_num);
-	buf[3] = 0; // TODO
-	*((chiaki_unaligned_uint32_t *)(buf + 4)) = 0; // key pos
-	*((chiaki_unaligned_uint32_t *)(buf + 8)) = 0; // gmac
+	chiaki_takion_feedback_header_format(buf, TAKION_PACKET_TYPE_FEEDBACK_STATE, seq_num, 1);
 	size_t buf_sz;
 	if(takion->version <= 9)
 	{
@@ -859,6 +884,7 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_send_feedback_state(ChiakiTakion *ta
 		buf_sz = 0xc + CHIAKI_FEEDBACK_STATE_BUF_SIZE_V12;
 		chiaki_feedback_state_format_v12(buf + 0xc, feedback_state);
 	}
+	buf[0xc] |= (uint8_t)(controller_id & 0x3);
 	return takion_send_feedback_packet(takion, buf, buf_sz);
 }
 
@@ -904,17 +930,13 @@ beach:
 	return err;
 }
 
-CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_send_feedback_history(ChiakiTakion *takion, ChiakiSeqNum16 seq_num, uint8_t *payload, size_t payload_size)
+CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_send_feedback_history(ChiakiTakion *takion, ChiakiSeqNum16 seq_num, uint8_t controller_id, uint8_t event_count, uint8_t *payload, size_t payload_size)
 {
 	size_t buf_size = 0xc + payload_size + CHIAKI_AKIRA_TAKION_EXT_HEADER_SIZE + TAKION_PSN_WRAPPER_SIZE;
 	uint8_t *buf = malloc(buf_size);
 	if(!buf)
 		return CHIAKI_ERR_MEMORY;
-	buf[0] = TAKION_PACKET_TYPE_FEEDBACK_HISTORY;
-	*((chiaki_unaligned_uint16_t *)(buf + 1)) = htons(seq_num);
-	buf[3] = 0; // TODO
-	*((chiaki_unaligned_uint32_t *)(buf + 4)) = 0; // key pos
-	*((chiaki_unaligned_uint32_t *)(buf + 8)) = 0; // gmac
+	chiaki_takion_feedback_header_format(buf, TAKION_PACKET_TYPE_FEEDBACK_HISTORY, seq_num, event_count);
 	memcpy(buf + 0xc, payload, payload_size);
 	ChiakiErrorCode err = takion_send_feedback_packet(takion, buf, 0xc + payload_size);
 	free(buf);

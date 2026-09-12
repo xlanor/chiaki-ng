@@ -477,3 +477,45 @@ message ExtMessage {
     required PayloadType type = 1;
     optional RttPayload rtt_payload = 2;
 }
+
+message AddVirtualDeviceRpc {
+    required string sessionKey = 1;
+    required int32 playerId = 2;
+    required int32 deviceId = 3;
+    optional int32 deviceType = 4;
+}
+
+message AddVirtualDeviceResponse {
+    required bool result = 1;
+    optional string description = 2;
+}
+
+message RemoveVirtualDeviceRpc {
+    required string sessionKey = 1;
+    required int32 playerId = 2;
+    optional int32 deviceType = 3;
+}
+
+message AddVirtualMicRpc {
+    required string sessionKey = 1;
+    required int32 controllerId = 2;
+    required int32 deviceId = 3;
+}
+
+message RemoveVirtualMicRpc {
+    required string sessionKey = 1;
+    required int32 controllerId = 2;
+}
+
+message PlayTimeLeftEvent {
+    required string sessionKey = 1;
+    required int32 timeLeft = 2;
+    required int32 totalTime = 3;
+    optional string reason = 4;
+}
+
+message SetProtectionEvent {
+    required string sessionKey = 1;
+    required bool audioProtected = 2;
+    required bool videoProtected = 3;
+}

@@ -109,6 +109,10 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_stream_connection_init(ChiakiStreamConnecti
 	stream_connection->streaminfo_early_buf_size = 0;
 	stream_connection->player_index = 0;
 	memset(stream_connection->led_state, 0, sizeof(stream_connection->led_state));
+	memset(stream_connection->led_state_by_index, 0, sizeof(stream_connection->led_state_by_index));
+	memset(stream_connection->pad_info_valid, 0, sizeof(stream_connection->pad_info_valid));
+	memset(stream_connection->pad_admitted, 0, sizeof(stream_connection->pad_admitted));
+	stream_connection->pad_admitted[0] = true;
 
 	stream_connection->haptic_intensity = Strong;
 	stream_connection->trigger_intensity = Strong;
@@ -306,6 +310,12 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_stream_connection_run(ChiakiStreamConnectio
 
 	CHIAKI_LOGI(session->log, "StreamConnection sending big");
 
+	for(uint8_t pad = 0; pad < CHIAKI_COUCH_MAX_PADS; pad++)
+	{
+		stream_connection->pad_controller_type[pad] = session->connect_info.enable_dualsense
+			? tkproto_ControllerConnectionPayload_ControllerType_DUALSENSE
+			: tkproto_ControllerConnectionPayload_ControllerType_DUALSHOCK4;
+	}
 	stream_connection->state = STATE_EXPECT_BANG;
 	stream_connection->state_finished = false;
 	stream_connection->state_failed = false;
@@ -358,15 +368,26 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_stream_connection_run(ChiakiStreamConnectio
 
 	err = chiaki_mutex_lock(&stream_connection->feedback_sender_mutex);
 	assert(err == CHIAKI_ERR_SUCCESS);
-	err = chiaki_feedback_sender_init(&stream_connection->feedback_sender, &stream_connection->takion);
-	if(err != CHIAKI_ERR_SUCCESS)
+	stream_connection->pad_count = session->pad_count < 1 ? 1 : session->pad_count;
+	if(stream_connection->pad_count > CHIAKI_COUCH_MAX_PADS)
+		stream_connection->pad_count = CHIAKI_COUCH_MAX_PADS;
+	for(uint8_t pad = 0; pad < stream_connection->pad_count; pad++)
 	{
-		chiaki_mutex_unlock(&stream_connection->feedback_sender_mutex);
-		CHIAKI_LOGE(stream_connection->log, "StreamConnection failed to start Feedback Sender");
-		goto disconnect;
+		err = chiaki_feedback_sender_init(&stream_connection->feedback_sender[pad], &stream_connection->takion, pad);
+		if(err != CHIAKI_ERR_SUCCESS)
+		{
+			for(uint8_t done = 0; done < pad; done++)
+			{
+				stream_connection->feedback_sender_active[done] = false;
+				chiaki_feedback_sender_fini(&stream_connection->feedback_sender[done]);
+			}
+			chiaki_mutex_unlock(&stream_connection->feedback_sender_mutex);
+			CHIAKI_LOGE(stream_connection->log, "StreamConnection failed to start Feedback Sender");
+			goto disconnect;
+		}
+		stream_connection->feedback_sender_active[pad] = true;
+		chiaki_feedback_sender_set_controller_state(&stream_connection->feedback_sender[pad], &session->controller_state[pad]);
 	}
-	stream_connection->feedback_sender_active = true;
-	chiaki_feedback_sender_set_controller_state(&stream_connection->feedback_sender, &session->controller_state);
 	chiaki_mutex_unlock(&stream_connection->feedback_sender_mutex);
 
 	stream_connection->state = STATE_IDLE;
@@ -395,8 +416,13 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_stream_connection_run(ChiakiStreamConnectio
 
 	err = chiaki_mutex_lock(&stream_connection->feedback_sender_mutex);
 	assert(err == CHIAKI_ERR_SUCCESS);
-	stream_connection->feedback_sender_active = false;
-	chiaki_feedback_sender_fini(&stream_connection->feedback_sender);
+	for(uint8_t pad = 0; pad < stream_connection->pad_count; pad++)
+	{
+		if(!stream_connection->feedback_sender_active[pad])
+			continue;
+		stream_connection->feedback_sender_active[pad] = false;
+		chiaki_feedback_sender_fini(&stream_connection->feedback_sender[pad]);
+	}
 	chiaki_mutex_unlock(&stream_connection->feedback_sender_mutex);
 
 	err = CHIAKI_ERR_SUCCESS;
@@ -561,6 +587,7 @@ static void stream_connection_takion_data_rumble(ChiakiStreamConnection *stream_
 	event.rumble.unknown = buf[0];
 	event.rumble.left = buf[1];
 	event.rumble.right = buf[2];
+	event.rumble.player_index = buf[0] & 0x03;
 	chiaki_session_send_event(stream_connection->session, &event);
 }
 
@@ -579,6 +606,7 @@ static void stream_connection_takion_data_trigger_effects(ChiakiStreamConnection
 	event.trigger_effects.type_right = buf[2];
 	memcpy(&event.trigger_effects.left, buf + 5, 10);
 	memcpy(&event.trigger_effects.right, buf + 15, 10);
+	event.trigger_effects.player_index = buf[0];
 	chiaki_session_send_event(stream_connection->session, &event);
 }
 
@@ -610,12 +638,24 @@ static void stream_connection_takion_data_pad_info(ChiakiStreamConnection *strea
 	bool motion_reset = false;
 	bool haptic_intensity_changed = false;
 	bool trigger_intensity_changed = false;
+	int pad_info_index = -1;
+	const uint8_t *pad_info_led = NULL;
+	bool pad_info_user_valid = true;
 
 	CHIAKI_LOGV(stream_connection->log, "Pad info packet: ");
 	chiaki_log_hexdump(stream_connection->log, CHIAKI_LOG_VERBOSE, buf, buf_size);
 
 	switch(buf_size)
 	{
+		case 0x4:
+			// PS5 acknowledgement; it contains no pad row.
+			return;
+		case 0x7:
+		{
+			pad_info_index = buf[0];
+			pad_info_led = buf + 1;
+			break;
+		}
 		case 0x19:
 		{
 			// sequence number of feedback packet this is responding to
@@ -632,21 +672,27 @@ static void stream_connection_takion_data_pad_info(ChiakiStreamConnection *strea
 				stream_connection->trigger_intensity = buf[21];
 				trigger_intensity_changed = true;
 			}
-			if(buf[12])
+			if(buf[8] == 0)
 			{
-				motion_reset = true;
-				CHIAKI_LOGV(stream_connection->log, "StreamConnection received motion reset request in response to feedback packet with seqnum %"PRIu16"x , %"PRIu32" seconds after stream began", feedback_packet_seq_num, timestamp);
+				if(buf[12])
+				{
+					motion_reset = true;
+					CHIAKI_LOGV(stream_connection->log, "StreamConnection received motion reset request in response to feedback packet with seqnum %"PRIu16"x , %"PRIu32" seconds after stream began", feedback_packet_seq_num, timestamp);
+				}
+				if(buf[8] != stream_connection->player_index)
+				{
+					player_index_changed = true;
+					stream_connection->player_index = buf[8];
+				}
+				if(memcmp(buf + 9, stream_connection->led_state, 3) != 0)
+				{
+					led_changed = true;
+					memcpy(stream_connection->led_state, buf + 9, 3);
+				}
 			}
-			if(buf[8] != stream_connection->player_index)
-			{
-				player_index_changed = true;
-				stream_connection->player_index = buf[8];
-			}
-			if(memcmp(buf + 9, stream_connection->led_state, 3) != 0)
-			{
-				led_changed = true;
-				memcpy(stream_connection->led_state, buf + 9, 3);
-			}
+			pad_info_index = buf[8];
+			pad_info_led = buf + 9;
+			pad_info_user_valid = buf[15] != 0;
 			break;
 		}
 		case 0x11:
@@ -661,29 +707,38 @@ static void stream_connection_takion_data_pad_info(ChiakiStreamConnection *strea
 				stream_connection->trigger_intensity = buf[13];
 				trigger_intensity_changed = true;
 			}
-			if(buf[4])
+			if(buf[0] == 0)
 			{
-				motion_reset = true;
+				if(buf[4])
+				{
+					motion_reset = true;
+				}
+				if(buf[0] != stream_connection->player_index)
+				{
+					player_index_changed = true;
+					stream_connection->player_index = buf[0];
+				}
+				if(memcmp(buf + 1, stream_connection->led_state, 3) != 0)
+				{
+					led_changed = true;
+					memcpy(stream_connection->led_state, buf + 1, 3);
+				}
 			}
-			if(buf[0] != stream_connection->player_index)
-			{
-				player_index_changed = true;
-				stream_connection->player_index = buf[0];
-			}
-			if(memcmp(buf + 1, stream_connection->led_state, 3) != 0)
-			{
-				led_changed = true;
-				memcpy(stream_connection->led_state, buf + 1, 3);
-			}
+			pad_info_index = buf[0];
+			pad_info_led = buf + 1;
+			pad_info_user_valid = buf[7] != 0;
 			break;
 		}
 		default:
 		{
-			CHIAKI_LOGE(stream_connection->log, "StreamConnection got pad info with size %#llx not equal to 0x19 or 0x11",
+			CHIAKI_LOGE(stream_connection->log, "StreamConnection got pad info with unsupported size %#llx",
 					(unsigned long long)buf_size);
 			return;
 		}
 	}
+	CHIAKI_LOGI(stream_connection->log, "Couch: PAD_INFO size=%#llx index=%d led=%02x%02x%02x",
+		(unsigned long long)buf_size, pad_info_index,
+		pad_info_led ? pad_info_led[0] : 0, pad_info_led ? pad_info_led[1] : 0, pad_info_led ? pad_info_led[2] : 0);
 	if(motion_reset)
 	{
 		CHIAKI_LOGI(stream_connection->log, "Setting motion control origin to current position");
@@ -723,6 +778,27 @@ static void stream_connection_takion_data_pad_info(ChiakiStreamConnection *strea
 		event.player_index = stream_connection->player_index;
 		chiaki_session_send_event(stream_connection->session, &event);
 	}
+	if(pad_info_index >= 0 && pad_info_index < CHIAKI_COUCH_MAX_PADS && pad_info_led && pad_info_user_valid)
+	{
+		bool pad_changed = !stream_connection->pad_info_valid[pad_info_index] ||
+			memcmp(pad_info_led, stream_connection->led_state_by_index[pad_info_index], 3) != 0;
+		stream_connection->pad_info_valid[pad_info_index] = true;
+		memcpy(stream_connection->led_state_by_index[pad_info_index], pad_info_led, 3);
+		if(!stream_connection->session->connect_info.ps5)
+			stream_connection->pad_admitted[pad_info_index] = true;
+		if(pad_changed && stream_connection->pad_admitted[pad_info_index])
+		{
+			ChiakiEvent event = { 0 };
+			event.type = CHIAKI_EVENT_PAD_CONFIRMED;
+			event.pad_confirmed.index = (uint8_t)pad_info_index;
+			memcpy(event.pad_confirmed.led, pad_info_led, 3);
+			chiaki_session_send_event(stream_connection->session, &event);
+		}
+	}
+	else if(pad_info_index >= 0 && pad_info_index < CHIAKI_COUCH_MAX_PADS && pad_info_led)
+	{
+		CHIAKI_LOGI(stream_connection->log, "Couch: ignoring PAD_INFO placeholder for unoccupied pad %d", pad_info_index);
+	}
 }
 
 static void stream_connection_takion_data_handle_disconnect(ChiakiStreamConnection *stream_connection, uint8_t *buf, size_t buf_size)
@@ -761,6 +837,14 @@ static void stream_connection_takion_data_idle(ChiakiStreamConnection *stream_co
 	tkproto_TakionMessage msg;
 	memset(&msg, 0, sizeof(msg));
 
+	uint8_t couch_dm_data[512];
+	ChiakiPBDecodeBuf couch_dm_buf;
+	couch_dm_buf.size = 0;
+	couch_dm_buf.max_size = sizeof(couch_dm_data);
+	couch_dm_buf.buf = couch_dm_data;
+	msg.direct_message_payload.data.arg = &couch_dm_buf;
+	msg.direct_message_payload.data.funcs.decode = chiaki_pb_decode_buf;
+
 	pb_istream_t stream = pb_istream_from_buffer(buf, buf_size);
 	bool r = pb_decode(&stream, tkproto_TakionMessage_fields, &msg);
 	if(!r)
@@ -772,6 +856,14 @@ static void stream_connection_takion_data_idle(ChiakiStreamConnection *stream_co
 
 	CHIAKI_LOGV(stream_connection->log, "StreamConnection received data with msg.type == %d", msg.type);
 	chiaki_log_hexdump(stream_connection->log, CHIAKI_LOG_VERBOSE, buf, buf_size);
+
+	if(msg.has_direct_message_payload)
+	{
+		CHIAKI_LOGI(stream_connection->log, "Couch: DIRECTMESSAGE dmtype=%d dest=%d datalen=%u",
+			(int)msg.direct_message_payload.direct_message_type,
+			(int)msg.direct_message_payload.destination, (unsigned)couch_dm_buf.size);
+		chiaki_log_hexdump(stream_connection->log, CHIAKI_LOG_INFO, couch_dm_data, couch_dm_buf.size);
+	}
 
 	switch (msg.type)
 	{
@@ -1223,9 +1315,9 @@ static ChiakiErrorCode stream_connection_send_big(ChiakiStreamConnection *stream
 	return err;
 }
 
-static ChiakiErrorCode stream_connection_send_controller_connection(ChiakiStreamConnection *stream_connection)
+static ChiakiErrorCode stream_connection_send_controller_connection_for_pad(ChiakiStreamConnection *stream_connection,
+		uint8_t pad, bool uses_controller_id)
 {
-	ChiakiSession *session = stream_connection->session;
 	tkproto_TakionMessage msg;
 	memset(&msg, 0, sizeof(msg));
 
@@ -1233,25 +1325,243 @@ static ChiakiErrorCode stream_connection_send_controller_connection(ChiakiStream
 	msg.has_controller_connection_payload = true;
 	msg.controller_connection_payload.has_connected = true;
 	msg.controller_connection_payload.connected = true;
-	msg.controller_connection_payload.has_controller_id = false;
+	msg.controller_connection_payload.has_controller_id = uses_controller_id;
+	msg.controller_connection_payload.controller_id = pad;
 	msg.controller_connection_payload.has_controller_type = true;
-	msg.controller_connection_payload.controller_type = session->connect_info.enable_dualsense
-		? tkproto_ControllerConnectionPayload_ControllerType_DUALSENSE
-		: tkproto_ControllerConnectionPayload_ControllerType_DUALSHOCK4;
+	msg.controller_connection_payload.controller_type =
+		(tkproto_ControllerConnectionPayload_ControllerType)stream_connection->pad_controller_type[pad];
 
 	uint8_t buf[2048];
-	size_t buf_size;
-
 	pb_ostream_t stream = pb_ostream_from_buffer(buf, sizeof(buf));
-	bool pbr = pb_encode(&stream, tkproto_TakionMessage_fields, &msg);
-	if(!pbr)
+	if(!pb_encode(&stream, tkproto_TakionMessage_fields, &msg))
 	{
 		CHIAKI_LOGE(stream_connection->log, "StreamConnection controller connection protobuf encoding failed");
 		return CHIAKI_ERR_UNKNOWN;
 	}
 
-	buf_size = stream.bytes_written;
-	return chiaki_takion_send_message_data(&stream_connection->takion, 1, 1, buf, buf_size, NULL);
+	CHIAKI_LOGI(stream_connection->log, "Couch: CONTROLLERCONNECTION pad=%u has_id=%d id=%u type=%d",
+		(unsigned)pad, (int)uses_controller_id, (unsigned)pad,
+		(int)msg.controller_connection_payload.controller_type);
+	return chiaki_takion_send_message_data(&stream_connection->takion, 1, 1, buf, stream.bytes_written, NULL);
+}
+
+static ChiakiErrorCode stream_connection_send_controller_connection(ChiakiStreamConnection *stream_connection)
+{
+	ChiakiSession *session = stream_connection->session;
+	uint8_t pad_count = stream_connection->pad_count;
+	if(session->pad_count > pad_count)
+		pad_count = session->pad_count;
+	if(pad_count < 1)
+		pad_count = 1;
+	if(pad_count > CHIAKI_COUCH_MAX_PADS)
+		pad_count = CHIAKI_COUCH_MAX_PADS;
+	bool uses_controller_id = chiaki_couch_uses_controller_id(pad_count);
+
+	for(uint8_t pad = 0; pad < pad_count; pad++)
+	{
+		ChiakiErrorCode err = stream_connection_send_controller_connection_for_pad(stream_connection, pad, uses_controller_id);
+		if(err != CHIAKI_ERR_SUCCESS)
+			return err;
+	}
+	return CHIAKI_ERR_SUCCESS;
+}
+
+static ChiakiErrorCode stream_connection_send_controller_disconnection(ChiakiStreamConnection *stream_connection, uint8_t pad)
+{
+	tkproto_TakionMessage msg;
+	memset(&msg, 0, sizeof(msg));
+
+	msg.type = tkproto_TakionMessage_PayloadType_CONTROLLERCONNECTION;
+	msg.has_controller_connection_payload = true;
+	msg.controller_connection_payload.has_connected = true;
+	msg.controller_connection_payload.connected = false;
+	msg.controller_connection_payload.has_controller_id = true;
+	msg.controller_connection_payload.controller_id = pad;
+	msg.controller_connection_payload.has_controller_type = true;
+	msg.controller_connection_payload.controller_type = tkproto_ControllerConnectionPayload_ControllerType_NOTSET;
+
+	uint8_t buf[2048];
+	pb_ostream_t stream = pb_ostream_from_buffer(buf, sizeof(buf));
+	if(!pb_encode(&stream, tkproto_TakionMessage_fields, &msg))
+	{
+		CHIAKI_LOGE(stream_connection->log, "StreamConnection controller disconnection protobuf encoding failed");
+		return CHIAKI_ERR_UNKNOWN;
+	}
+
+	CHIAKI_LOGI(stream_connection->log, "Couch: CONTROLLERCONNECTION disconnect pad=%u", (unsigned)pad);
+	return chiaki_takion_send_message_data(&stream_connection->takion, 1, 1, buf, stream.bytes_written, NULL);
+}
+
+CHIAKI_EXPORT ChiakiErrorCode chiaki_session_couch_announce_pads(ChiakiSession *session)
+{
+	if(!session)
+		return CHIAKI_ERR_INVALID_DATA;
+	return stream_connection_send_controller_connection(&session->stream_connection);
+}
+
+CHIAKI_EXPORT ChiakiErrorCode chiaki_session_couch_send_presence(ChiakiSession *session, uint8_t pad, bool present)
+{
+	if(!session || pad >= CHIAKI_COUCH_MAX_PADS)
+		return CHIAKI_ERR_INVALID_DATA;
+
+	ChiakiStreamConnection *sc = &session->stream_connection;
+	ChiakiErrorCode err = chiaki_mutex_lock(&sc->feedback_sender_mutex);
+	if(err != CHIAKI_ERR_SUCCESS)
+		return err;
+
+	if(!sc->feedback_sender_active[pad])
+	{
+		chiaki_mutex_unlock(&sc->feedback_sender_mutex);
+		return CHIAKI_ERR_UNINITIALIZED;
+	}
+
+	uint8_t payload[2] = { (uint8_t)(0x80 | (pad & 0x3)), present ? 0xbf : 0x9f };
+	err = chiaki_takion_send_feedback_history(&sc->takion,
+			chiaki_takion_next_feedback_history_seq(&sc->takion), pad, 1, payload, sizeof(payload));
+	chiaki_mutex_unlock(&sc->feedback_sender_mutex);
+
+	CHIAKI_LOGI(session->log, "Couch: sent presence %s for pad %u", present ? "on" : "off", (unsigned)pad);
+	return err;
+}
+
+CHIAKI_EXPORT ChiakiErrorCode chiaki_session_couch_open_pad(ChiakiSession *session, uint8_t pad, uint8_t controller_type)
+{
+	if(!session || pad == 0 || pad >= CHIAKI_COUCH_MAX_PADS)
+		return CHIAKI_ERR_INVALID_DATA;
+
+	ChiakiStreamConnection *sc = &session->stream_connection;
+	ChiakiErrorCode err = chiaki_mutex_lock(&sc->feedback_sender_mutex);
+	if(err != CHIAKI_ERR_SUCCESS)
+		return err;
+
+	if(controller_type)
+		sc->pad_controller_type[pad] = controller_type;
+
+	if(!sc->feedback_sender_active[pad])
+	{
+		err = chiaki_feedback_sender_init(&sc->feedback_sender[pad], &sc->takion, pad);
+		if(err != CHIAKI_ERR_SUCCESS)
+		{
+			chiaki_mutex_unlock(&sc->feedback_sender_mutex);
+			CHIAKI_LOGE(session->log, "Couch: failed to start feedback sender for pad %u", (unsigned)pad);
+			return err;
+		}
+		sc->feedback_sender_active[pad] = true;
+		chiaki_feedback_sender_set_controller_state(&sc->feedback_sender[pad], &session->controller_state[pad]);
+	}
+
+	if(pad + 1 > sc->pad_count)
+		sc->pad_count = (uint8_t)(pad + 1);
+	uint8_t announced = sc->pad_count;
+	chiaki_mutex_unlock(&sc->feedback_sender_mutex);
+
+	CHIAKI_LOGI(session->log, "Couch: opened pad %u (controller type %u), pad_count now %u",
+		(unsigned)pad, (unsigned)sc->pad_controller_type[pad], (unsigned)announced);
+	return stream_connection_send_controller_connection_for_pad(sc, pad, true);
+}
+
+CHIAKI_EXPORT ChiakiErrorCode chiaki_session_couch_accept_pad(ChiakiSession *session, uint8_t pad)
+{
+	if(!session || pad == 0 || pad >= CHIAKI_COUCH_MAX_PADS)
+		return CHIAKI_ERR_INVALID_DATA;
+
+	ChiakiStreamConnection *sc = &session->stream_connection;
+	ChiakiErrorCode err = chiaki_mutex_lock(&sc->feedback_sender_mutex);
+	if(err != CHIAKI_ERR_SUCCESS)
+		return err;
+
+	if(!sc->feedback_sender_active[pad])
+	{
+		err = chiaki_feedback_sender_init(&sc->feedback_sender[pad], &sc->takion, pad);
+		if(err != CHIAKI_ERR_SUCCESS)
+		{
+			chiaki_mutex_unlock(&sc->feedback_sender_mutex);
+			return err;
+		}
+		sc->feedback_sender_active[pad] = true;
+		chiaki_feedback_sender_set_controller_state(&sc->feedback_sender[pad], &session->controller_state[pad]);
+	}
+	if(pad + 1 > sc->pad_count)
+		sc->pad_count = (uint8_t)(pad + 1);
+	sc->pad_admitted[pad] = true;
+	chiaki_mutex_unlock(&sc->feedback_sender_mutex);
+
+	CHIAKI_LOGI(session->log, "Couch: accepted PS5 pad %u without a controller announcement", (unsigned)pad);
+	return CHIAKI_ERR_SUCCESS;
+}
+
+static ChiakiErrorCode stream_connection_deactivate_pad(ChiakiSession *session, uint8_t pad, bool send_disconnection)
+{
+	if(!session || pad == 0 || pad >= CHIAKI_COUCH_MAX_PADS)
+		return CHIAKI_ERR_INVALID_DATA;
+
+	ChiakiStreamConnection *sc = &session->stream_connection;
+	ChiakiErrorCode err = chiaki_mutex_lock(&sc->feedback_sender_mutex);
+	if(err != CHIAKI_ERR_SUCCESS)
+		return err;
+
+	bool was_active = sc->feedback_sender_active[pad];
+	sc->pad_admitted[pad] = false;
+	sc->pad_info_valid[pad] = false;
+	if(was_active)
+	{
+		sc->feedback_sender_active[pad] = false;
+		chiaki_feedback_sender_fini(&sc->feedback_sender[pad]);
+	}
+
+	uint8_t highest = 0;
+	for(uint8_t i = 1; i < CHIAKI_COUCH_MAX_PADS; i++)
+	{
+		if(sc->feedback_sender_active[i])
+			highest = i;
+	}
+	sc->pad_count = (uint8_t)(highest + 1);
+	uint8_t remaining = sc->pad_count;
+	chiaki_mutex_unlock(&sc->feedback_sender_mutex);
+
+	if(!was_active)
+		return CHIAKI_ERR_SUCCESS;
+
+	if(session->pad_count > remaining)
+		session->pad_count = remaining;
+
+	CHIAKI_LOGI(session->log, "Couch: closed pad %u, pad_count now %u", (unsigned)pad, (unsigned)remaining);
+	if(!send_disconnection)
+		return CHIAKI_ERR_SUCCESS;
+	return stream_connection_send_controller_disconnection(sc, pad);
+}
+
+CHIAKI_EXPORT ChiakiErrorCode chiaki_session_couch_close_pad(ChiakiSession *session, uint8_t pad)
+{
+	return stream_connection_deactivate_pad(session, pad, !session->connect_info.ps5);
+}
+
+CHIAKI_EXPORT ChiakiErrorCode chiaki_session_couch_join_ps4(ChiakiSession *session, uint8_t pad, uint8_t controller_type)
+{
+	ChiakiErrorCode err = chiaki_session_couch_open_pad(session, pad, controller_type);
+	if(err != CHIAKI_ERR_SUCCESS)
+		return err;
+	err = chiaki_session_couch_send_presence(session, pad, true);
+	if(err != CHIAKI_ERR_SUCCESS)
+		return err;
+	return chiaki_session_couch_send_pad_join(session, pad, 0);
+}
+
+CHIAKI_EXPORT ChiakiErrorCode chiaki_session_couch_leave_ps4(ChiakiSession *session, uint8_t pad)
+{
+	if(!session || pad == 0 || pad >= CHIAKI_COUCH_MAX_PADS)
+		return CHIAKI_ERR_INVALID_DATA;
+	ChiakiErrorCode err = stream_connection_send_controller_disconnection(&session->stream_connection, pad);
+	if(err != CHIAKI_ERR_SUCCESS)
+		return err;
+	err = chiaki_session_couch_send_presence(session, pad, false);
+	if(err != CHIAKI_ERR_SUCCESS)
+		return err;
+	err = chiaki_session_couch_send_leave(session, pad);
+	if(err != CHIAKI_ERR_SUCCESS)
+		return err;
+
+	return stream_connection_deactivate_pad(session, pad, false);
 }
 
 static ChiakiErrorCode stream_connection_enable_microphone(ChiakiStreamConnection *stream_connection)

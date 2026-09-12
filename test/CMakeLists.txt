@@ -22,7 +22,8 @@ set(CHIAKI_UNIT_SOURCES
 				regist.c
 				cloudcatalog_merge.c
 				cloudsession_kamaji.c
-				aia.c)
+				aia.c
+				couch_multipad.c)
 
 if(CHIAKI_ENABLE_FFMPEG_DECODER)
 	list(APPEND CHIAKI_UNIT_SOURCES ffmpegdecoder.c)
@@ -33,6 +34,8 @@ add_test(NAME unit COMMAND chiaki-unit)
 
 target_link_libraries(chiaki-unit chiaki-lib munit)
 target_include_directories(chiaki-unit PRIVATE "${CMAKE_SOURCE_DIR}/lib/src")
+target_include_directories(chiaki-unit PRIVATE "${CMAKE_BINARY_DIR}/lib/protobuf")
+add_dependencies(chiaki-unit chiaki-pb)
 find_package(OpenSSL REQUIRED)
 target_link_libraries(chiaki-unit OpenSSL::Crypto)
 if(TARGET PkgConfig::json-c)

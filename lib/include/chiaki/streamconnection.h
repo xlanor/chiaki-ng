@@ -50,15 +50,20 @@ typedef struct chiaki_stream_connection_t
 	uint8_t motion_counter[4];
 	uint8_t led_state[3];
 	uint8_t player_index;
+	uint8_t led_state_by_index[CHIAKI_COUCH_MAX_PADS][3];
+	bool pad_info_valid[CHIAKI_COUCH_MAX_PADS];
+	bool pad_admitted[CHIAKI_COUCH_MAX_PADS];
 	ChiakiDualSenseEffectIntensity haptic_intensity;
 	ChiakiDualSenseEffectIntensity trigger_intensity;
-	ChiakiFeedbackSender feedback_sender;
+	ChiakiFeedbackSender feedback_sender[CHIAKI_COUCH_MAX_PADS];
 	ChiakiCongestionControl congestion_control;
 	/**
 	 * whether feedback_sender is initialized
 	 * only if this is true, feedback_sender may be accessed!
 	 */
-	bool feedback_sender_active;
+	bool feedback_sender_active[CHIAKI_COUCH_MAX_PADS];
+	uint8_t pad_controller_type[CHIAKI_COUCH_MAX_PADS];
+	uint8_t pad_count;
 	/**
 	 * protects feedback_sender and feedback_sender_active
 	 */

@@ -139,6 +139,13 @@ static inline bool chiaki_service_type_is_cloud(ChiakiServiceType service_type)
 #define CHIAKI_CLOUD_RTT_SAFETY_OFFSET_MS 20
 #define CHIAKI_CLOUD_RTT_MIN_MS 1
 
+#define CHIAKI_COUCH_MAX_PADS 4
+
+static inline bool chiaki_couch_uses_controller_id(uint8_t pad_count)
+{
+	return pad_count > 1;
+}
+
 CHIAKI_EXPORT const char *chiaki_service_type_string(ChiakiServiceType service_type);
 
 #ifdef __cplusplus

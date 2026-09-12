@@ -18,6 +18,7 @@ extern MunitTest tests_bitstream[];
 extern MunitTest tests_cloudcatalog_merge[];
 extern MunitTest tests_cloudsession_kamaji[];
 extern MunitTest tests_aia[];
+extern MunitTest tests_couch_multipad[];
 #if CHIAKI_LIB_ENABLE_FFMPEG_DECODER
 extern MunitTest tests_ffmpegdecoder[];
 #endif
@@ -124,6 +125,13 @@ static MunitSuite suites[] = {
 	{
 		"/aia",
 		tests_aia,
+		NULL,
+		1,
+		MUNIT_SUITE_OPTION_NONE
+	},
+	{
+		"/couch_multipad",
+		tests_couch_multipad,
 		NULL,
 		1,
 		MUNIT_SUITE_OPTION_NONE

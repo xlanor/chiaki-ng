@@ -55,7 +55,13 @@ typedef enum ctrl_message_type_t {
 	CTRL_MESSAGE_TYPE_MIC_CONNECT = 0x30,
 	CTRL_MESSAGE_TYPE_MIC_TOGGLE = 0x36,
 	CTRL_MESSAGE_TYPE_DISPLAY_DEVICES = 0x910,
-	CTRL_MESSAGE_TYPE_SWITCH_TO_STREAM_CONNECTION = 0x34
+	CTRL_MESSAGE_TYPE_SWITCH_TO_STREAM_CONNECTION = 0x34,
+	CTRL_MESSAGE_TYPE_COUCH_LEAVE_REP = 0x8009,
+	CTRL_MESSAGE_TYPE_COUCH_PAD_JOIN_REP = 0x8008,
+	CTRL_MESSAGE_TYPE_COUCH_PAD_DROPPED = 0xa,
+	CTRL_MESSAGE_TYPE_COUCH_USER_CODE = 0x61,
+	CTRL_MESSAGE_TYPE_COUCH_PASSCODE_REQ = 0x64,
+	CTRL_MESSAGE_TYPE_COUCH_USER_JOIN_REP = 0x8068
 } CtrlMessageType;
 
 typedef enum ctrl_login_state_t {
@@ -127,6 +133,12 @@ static void ctrl_message_received_keyboard_open(ChiakiCtrl *ctrl, uint8_t *paylo
 static void ctrl_message_received_keyboard_close(ChiakiCtrl *ctrl, uint8_t *payload, size_t payload_size);
 static void ctrl_message_received_keyboard_text_change(ChiakiCtrl *ctrl, uint8_t *payload, size_t payload_size);
 static void ctrl_message_received_switch_to_stream_connection(ChiakiCtrl *ctrl, uint8_t *payload, size_t payload_size);
+static void ctrl_message_received_couch_user_join_rep(ChiakiCtrl *ctrl, uint8_t *payload, size_t payload_size);
+static void ctrl_message_received_couch_passcode_req(ChiakiCtrl *ctrl, uint8_t *payload, size_t payload_size);
+static void ctrl_message_received_couch_leave_rep(ChiakiCtrl *ctrl, uint8_t *payload, size_t payload_size);
+static void ctrl_message_received_couch_pad_join_rep(ChiakiCtrl *ctrl, uint8_t *payload, size_t payload_size);
+static void ctrl_message_received_couch_pad_dropped(ChiakiCtrl *ctrl, uint8_t *payload, size_t payload_size);
+static void ctrl_message_received_couch_user_code(ChiakiCtrl *ctrl, uint8_t *payload, size_t payload_size);
 static ChiakiErrorCode ctrl_connect_tcp(ChiakiCtrl *ctrl);
 static void ctrl_disconnect_tcp(ChiakiCtrl *ctrl);
 
@@ -846,6 +858,24 @@ static void ctrl_message_received(ChiakiCtrl *ctrl, uint16_t msg_type, uint8_t *
 		case CTRL_MESSAGE_TYPE_SWITCH_TO_STREAM_CONNECTION:
 			ctrl_message_received_switch_to_stream_connection(ctrl, payload, payload_size);
 			break;
+		case CTRL_MESSAGE_TYPE_COUCH_USER_JOIN_REP:
+			ctrl_message_received_couch_user_join_rep(ctrl, payload, payload_size);
+			break;
+		case CTRL_MESSAGE_TYPE_COUCH_PASSCODE_REQ:
+			ctrl_message_received_couch_passcode_req(ctrl, payload, payload_size);
+			break;
+		case CTRL_MESSAGE_TYPE_COUCH_LEAVE_REP:
+			ctrl_message_received_couch_leave_rep(ctrl, payload, payload_size);
+			break;
+		case CTRL_MESSAGE_TYPE_COUCH_PAD_JOIN_REP:
+			ctrl_message_received_couch_pad_join_rep(ctrl, payload, payload_size);
+			break;
+		case CTRL_MESSAGE_TYPE_COUCH_PAD_DROPPED:
+			ctrl_message_received_couch_pad_dropped(ctrl, payload, payload_size);
+			break;
+		case CTRL_MESSAGE_TYPE_COUCH_USER_CODE:
+			ctrl_message_received_couch_user_code(ctrl, payload, payload_size);
+			break;
 		default:
 			// CHIAKI_LOGW(ctrl->session->log, "Received Ctrl Message with unknown type %#x", msg_type);
 			chiaki_log_hexdump(ctrl->session->log, CHIAKI_LOG_WARNING, payload, payload_size);
@@ -876,6 +906,188 @@ CHIAKI_EXPORT void ctrl_enable_features(ChiakiCtrl *ctrl)
 	ctrl_message_toggle_microphone(ctrl, false);
 	uint8_t display[0x4] = { 0x00, 0x00, 0x00, 0x00 };
 	ctrl_message_send(ctrl, CTRL_MESSAGE_TYPE_DISPLAY_DEVICES, display, 0x4);
+}
+
+static void ctrl_couch_send_passcode_request(ChiakiCtrl *ctrl, uint8_t pad, bool retry)
+{
+	ChiakiEvent event = { 0 };
+	event.type = CHIAKI_EVENT_PAD_PASSCODE_REQUEST;
+	event.pad_passcode_request.index = pad;
+	event.pad_passcode_request.retry = retry;
+	chiaki_session_send_event(ctrl->session, &event);
+}
+
+CHIAKI_EXPORT bool chiaki_ctrl_couch_parse_user_code(const uint8_t *payload, size_t payload_size,
+	uint8_t *pad, char user_code[CHIAKI_COUCH_USER_CODE_LENGTH + 1])
+{
+	if(!payload || !pad || !user_code || payload_size != CHIAKI_COUCH_USER_CODE_LENGTH + 2)
+		return false;
+	if(payload[0] == 0 || payload[0] >= CHIAKI_COUCH_MAX_PADS
+			|| payload[CHIAKI_COUCH_USER_CODE_LENGTH + 1] != '\0')
+		return false;
+	for(size_t i = 0; i < CHIAKI_COUCH_USER_CODE_LENGTH; i++)
+	{
+		if(payload[i + 1] < '0' || payload[i + 1] > '9')
+			return false;
+	}
+	*pad = payload[0];
+	memcpy(user_code, payload + 1, CHIAKI_COUCH_USER_CODE_LENGTH);
+	user_code[CHIAKI_COUCH_USER_CODE_LENGTH] = '\0';
+	return true;
+}
+
+static void ctrl_message_received_couch_user_code(ChiakiCtrl *ctrl, uint8_t *payload, size_t payload_size)
+{
+	ChiakiEvent event = { 0 };
+	if(!chiaki_ctrl_couch_parse_user_code(payload, payload_size,
+			&event.pad_authorization_required.index, event.pad_authorization_required.user_code))
+	{
+		CHIAKI_LOGW(ctrl->session->log, "Couch: malformed PS5 authorization challenge (ctrl 0x0061, size %zu)", payload_size);
+		return;
+	}
+
+	CHIAKI_LOGI(ctrl->session->log, "Couch: pad %u requires PSN Easy Sign-In authorization (ctrl 0x0061)",
+		(unsigned)event.pad_authorization_required.index);
+	event.type = CHIAKI_EVENT_PAD_AUTHORIZATION_REQUIRED;
+	chiaki_session_send_event(ctrl->session, &event);
+}
+
+static void ctrl_message_received_couch_user_join_rep(ChiakiCtrl *ctrl, uint8_t *payload, size_t payload_size)
+{
+	if(payload_size != 2)
+	{
+		CHIAKI_LOGW(ctrl->session->log, "Couch: user join reply with size %zu, expected 2", payload_size);
+		return;
+	}
+
+	uint8_t pad = payload[0];
+	uint8_t status = payload[1];
+	CHIAKI_LOGI(ctrl->session->log, "Couch: user join reply (0x8068) for pad %u, status %u", (unsigned)pad, (unsigned)status);
+
+	if(pad >= CHIAKI_COUCH_MAX_PADS)
+	{
+		CHIAKI_LOGW(ctrl->session->log, "Couch: user join reply names pad %u, out of range", (unsigned)pad);
+		return;
+	}
+
+	if(status == 3)
+	{
+		CHIAKI_LOGI(ctrl->session->log, "Couch: pad %u needs the account's console login passcode", (unsigned)pad);
+		ctrl_couch_send_passcode_request(ctrl, pad, true);
+		return;
+	}
+
+	if(status != 0)
+	{
+		CHIAKI_LOGE(ctrl->session->log, "Couch: pad %u join refused with status %u%s", (unsigned)pad, (unsigned)status,
+			status == 1 ? " (account is probably not signed in to PSN on the console)" : "");
+		ChiakiEvent event = { 0 };
+		event.type = CHIAKI_EVENT_PAD_JOIN_FAILED;
+		event.pad_join_failed.index = pad;
+		event.pad_join_failed.status = status;
+		chiaki_session_send_event(ctrl->session, &event);
+		return;
+	}
+
+	ChiakiErrorCode err = chiaki_session_couch_accept_pad(ctrl->session, pad);
+	if(err != CHIAKI_ERR_SUCCESS)
+	{
+		CHIAKI_LOGE(ctrl->session->log, "Couch: failed to activate accepted PS5 pad %u", (unsigned)pad);
+		ChiakiEvent failed = { 0 };
+		failed.type = CHIAKI_EVENT_PAD_JOIN_FAILED;
+		failed.pad_join_failed.index = pad;
+		failed.pad_join_failed.status = 1;
+		chiaki_session_send_event(ctrl->session, &failed);
+		return;
+	}
+
+	ChiakiEvent event = { 0 };
+	event.type = CHIAKI_EVENT_PAD_CONFIRMED;
+	event.pad_confirmed.index = pad;
+	memcpy(event.pad_confirmed.led, ctrl->session->stream_connection.led_state_by_index[pad], 3);
+	chiaki_session_send_event(ctrl->session, &event);
+}
+
+static void ctrl_message_received_couch_passcode_req(ChiakiCtrl *ctrl, uint8_t *payload, size_t payload_size)
+{
+	if(payload_size != 4)
+	{
+		CHIAKI_LOGW(ctrl->session->log, "Couch: passcode request with size %zu, expected 4", payload_size);
+		return;
+	}
+
+	uint8_t pad = payload[0];
+	if(pad >= CHIAKI_COUCH_MAX_PADS)
+	{
+		CHIAKI_LOGW(ctrl->session->log, "Couch: passcode request names pad %u, out of range", (unsigned)pad);
+		return;
+	}
+
+	CHIAKI_LOGI(ctrl->session->log, "Couch: console asked for pad %u's console login passcode (ctrl 0x0064)", (unsigned)pad);
+	ctrl_couch_send_passcode_request(ctrl, pad, false);
+}
+
+static void ctrl_message_received_couch_pad_join_rep(ChiakiCtrl *ctrl, uint8_t *payload, size_t payload_size)
+{
+	if(payload_size != 2)
+	{
+		CHIAKI_LOGW(ctrl->session->log, "Couch: pad join reply with size %zu, expected 2", payload_size);
+		return;
+	}
+
+	uint8_t pad = payload[0];
+	uint8_t result = payload[1];
+	CHIAKI_LOGI(ctrl->session->log, "Couch: pad join reply (0x8008) for pad %u, result %u", (unsigned)pad, (unsigned)result);
+
+	if(pad >= CHIAKI_COUCH_MAX_PADS)
+		return;
+
+	if(result != 0)
+	{
+		ChiakiEvent event = { 0 };
+		event.type = CHIAKI_EVENT_PAD_JOIN_FAILED;
+		event.pad_join_failed.index = pad;
+		event.pad_join_failed.status = result;
+		chiaki_session_send_event(ctrl->session, &event);
+		return;
+	}
+
+	ChiakiEvent event = { 0 };
+	event.type = CHIAKI_EVENT_PAD_ANNOUNCED;
+	event.pad_confirmed.index = pad;
+	memcpy(event.pad_confirmed.led, ctrl->session->stream_connection.led_state_by_index[pad], 3);
+	chiaki_session_send_event(ctrl->session, &event);
+}
+
+static void ctrl_message_received_couch_pad_dropped(ChiakiCtrl *ctrl, uint8_t *payload, size_t payload_size)
+{
+	if(payload_size != 1)
+	{
+		CHIAKI_LOGW(ctrl->session->log, "Couch: pad dropped with size %zu, expected 1", payload_size);
+		return;
+	}
+
+	uint8_t pad = payload[0];
+	CHIAKI_LOGI(ctrl->session->log, "Couch: console dropped pad %u (ctrl 0x000A)", (unsigned)pad);
+
+	if(pad == 0 || pad >= CHIAKI_COUCH_MAX_PADS)
+		return;
+
+	ChiakiEvent event = { 0 };
+	event.type = CHIAKI_EVENT_PAD_DROPPED;
+	event.pad_join_failed.index = pad;
+	event.pad_join_failed.status = 0;
+	chiaki_session_send_event(ctrl->session, &event);
+}
+
+static void ctrl_message_received_couch_leave_rep(ChiakiCtrl *ctrl, uint8_t *payload, size_t payload_size)
+{
+	if(payload_size != 2)
+	{
+		CHIAKI_LOGW(ctrl->session->log, "Couch: leave reply with size %zu, expected 2", payload_size);
+		return;
+	}
+	CHIAKI_LOGI(ctrl->session->log, "Couch: leave reply for pad %u, result %u", (unsigned)payload[0], (unsigned)payload[1]);
 }
 
 static void ctrl_message_received_session_id(ChiakiCtrl *ctrl, uint8_t *payload, size_t payload_size)
@@ -1302,7 +1514,7 @@ static ChiakiErrorCode ctrl_connect(ChiakiCtrl *ctrl)
 		path = "/sie/ps4/rp/sess/ctrl";
 	const char *rp_version = chiaki_rp_version_string(session->target);
 	int port = session->holepunch_session ? chiaki_get_ps_ctrl_port(session->holepunch_session) : SESSION_CTRL_PORT;
-	char send_buf[512];
+	char send_buf[1024];
 	int request_len = snprintf(send_buf, sizeof(send_buf), request_fmt,
 			path, session->connect_info.hostname, port, auth_b64,
 			rp_version ? rp_version : "", did_b64, ostype_b64,
