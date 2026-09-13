@@ -873,14 +873,6 @@ static void stream_connection_takion_data_idle(ChiakiStreamConnection *stream_co
 	case tkproto_TakionMessage_PayloadType_CONNECTIONQUALITY:
 	{
 		tkproto_ConnectionQualityPayload q = msg.connection_quality_payload;
-		CHIAKI_LOGV(
-			stream_connection->log,
-			"StreamConnection received connection quality: target_bitrate=%d, "
-			"upstream_bitrate=%d, upstream_loss=%.4f, "
-			"disable_upstream_audio=%d, rtt=%.4f, loss=%lld",
-			 q.target_bitrate, q.upstream_bitrate,
-			 q.upstream_loss,
-			 q.disable_upstream_audio, q.rtt, q.loss);
 		if(q.has_loss)
 			stream_connection->console_loss = q.loss;
 		if(q.has_upstream_loss)
@@ -889,7 +881,14 @@ static void stream_connection_takion_data_idle(ChiakiStreamConnection *stream_co
 			stream_connection->target_bitrate = q.target_bitrate;
 		stream_connection->console_quality_valid = true;
 		stream_connection->measured_bitrate = chiaki_stream_stats_bitrate(&stream_connection->video_receiver->frame_processor.stream_stats, stream_connection->session->connect_info.video_profile.max_fps) / 1000000.0;
-		CHIAKI_LOGV(stream_connection->log, "StreamConnection measured bitrate: %.4f MBit/s", stream_connection->measured_bitrate);
+		CHIAKI_LOGD(stream_connection->log,
+			"Bitrate recovery: target=%.3f Mbit/s measured=%.3f Mbit/s "
+			"console_rtt=%.1f ms client_rtt=%.1f ms console_loss=%llu",
+			stream_connection->target_bitrate / 1000000.0,
+			stream_connection->measured_bitrate,
+			q.rtt,
+			stream_connection->rtt_ms,
+			(unsigned long long)stream_connection->console_loss);
 		chiaki_stream_stats_reset(&stream_connection->video_receiver->frame_processor.stream_stats);
 		break;
 	}

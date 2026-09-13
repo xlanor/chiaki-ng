@@ -13,6 +13,7 @@ set(CHIAKI_UNIT_SOURCES
 				"${CMAKE_SOURCE_DIR}/lib/src/crypto/libnx/microecc/uECC.c"
 				"${CMAKE_SOURCE_DIR}/lib/src/crypto/libnx/microecc/uECC_p521.c"
 				seqnum.c
+				packetstats.c
 				keystate.c
 				reorderqueue.c
 				fec.c
