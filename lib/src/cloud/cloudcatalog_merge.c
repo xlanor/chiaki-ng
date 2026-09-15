@@ -153,7 +153,25 @@ static bool is_cloud_streaming_game(struct json_object *g)
 	return is_cloud_device_game(g);
 }
 
-// concept|platform edition key. Writes into out (>=96). Returns out (empty if no concept).
+static void normalize_edition_title(const char *raw, char *out, size_t out_sz)
+{
+	size_t o = 0;
+	out[0] = 0;
+	if(!raw)
+		return;
+	for(size_t i = 0; raw[i] && o < out_sz - 1; i++)
+	{
+		unsigned char c = (unsigned char)raw[i];
+		if(c < 0x80 && isalnum(c))
+			out[o++] = (char)tolower(c);
+	}
+	out[o] = 0;
+}
+
+// concept|platform|normalized-title edition key. Including the title preserves
+// genuinely distinct games that Sony publishes under one conceptId (notably the
+// three TimeSplitters releases), while duplicate SKUs of the same edition still
+// collapse and become product aliases.
 static const char *edition_key(struct json_object *g, char *out, size_t out_sz)
 {
 	out[0] = 0;
@@ -173,11 +191,15 @@ static const char *edition_key(struct json_object *g, char *out, size_t out_sz)
 	const char *platform = platform_structured(g);
 	if(!*platform)
 		platform = platform_token(game_product_id(g));
-	snprintf(out, out_sz, "%s|%s", concept, platform);
+	char title[192];
+	normalize_edition_title(cc_json_str(g, "name"), title, sizeof(title));
+	snprintf(out, out_sz, "%s|%s|%s", concept, platform, title);
 	return out;
 }
 
-// concept|platform key using storeProductId fallback (conceptPlatformKey).
+// concept|platform|title key using storeProductId fallback. The title component
+// prevents one owned entry from claiming or suppressing a different game that
+// happens to share Sony's conceptId.
 static const char *concept_platform_key(struct json_object *g, char *out, size_t out_sz)
 {
 	out[0] = 0;
@@ -193,7 +215,15 @@ static const char *concept_platform_key(struct json_object *g, char *out, size_t
 			pid = game_product_id(g);
 		platform = platform_token(pid);
 	}
-	snprintf(out, out_sz, "%s|%s", concept, platform);
+	const char *name = cc_json_str(g, "name");
+	if(!*name)
+	{
+		struct json_object *gm = cc_json_obj(g, "game_meta");
+		name = gm ? cc_json_str(gm, "name") : "";
+	}
+	char title[192];
+	normalize_edition_title(name, title, sizeof(title));
+	snprintf(out, out_sz, "%s|%s|%s", concept, platform, title);
 	return out;
 }
 
@@ -205,13 +235,29 @@ static bool is_plus_catalog_list(const char *list)
 		|| strcmp(list, "plus-monthly-games-list") == 0);
 }
 
-// productId stable key: drop last token of the dash/underscore split, join with '|'.
-// Writes into out (>=128). Returns out (empty if <2 tokens).
+// Product stable key. Sony returns the same title as a bare PPSA12345_00
+// entitlement and a full EP....-PPSA12345_00-... catalog SKU. The PPSA/CUSA
+// number is the common identity. Retain the older structural fallback for the
+// PS Now identifier families that do not carry either token.
 const char *cc_stable_key(const char *product_id, char *out, size_t out_sz)
 {
 	out[0] = 0;
 	if(!product_id || !*product_id)
 		return out;
+	for(const char *p = product_id; *p; p++)
+	{
+		if((strncmp(p, "PPSA", 4) != 0 && strncmp(p, "CUSA", 4) != 0)
+			|| !isdigit((unsigned char)p[4]))
+			continue;
+		size_t n = 4;
+		while(isdigit((unsigned char)p[n]))
+			n++;
+		if(n >= out_sz)
+			n = out_sz - 1;
+		memcpy(out, p, n);
+		out[n] = 0;
+		return out;
+	}
 	char tokens[16][64];
 	int ntok = 0;
 	char buf[256];
@@ -322,19 +368,29 @@ static struct json_object *normalize_apollo_game(struct json_object *raw)
 typedef struct
 {
 	struct json_object *by_product; // key -> int idx
-	struct json_object *by_concept; // concept|platform -> int idx
+	struct json_object *by_concept; // concept|platform|title -> int idx
+	struct json_object *by_stable;  // PPSA/CUSA title number -> int idx
 } CatalogIndex;
 
 static void register_in_index(struct json_object *game, int idx, CatalogIndex *ix)
 {
 	idx_put(ix->by_product, game_product_id(game), idx);
-	char ck[64];
+	char stable[128];
+	cc_stable_key(game_product_id(game), stable, sizeof(stable));
+	if(*stable)
+		idx_put(ix->by_stable, stable, idx);
+	char ck[384];
 	concept_platform_key(game, ck, sizeof(ck));
 	if(*ck)
 		idx_put(ix->by_concept, ck, idx);
 	const char *ent = game_entitlement_id(game);
 	if(*ent)
+	{
 		idx_put(ix->by_product, ent, idx);
+		cc_stable_key(ent, stable, sizeof(stable));
+		if(*stable)
+			idx_put(ix->by_stable, stable, idx);
+	}
 }
 
 static int find_index_for_owned(struct json_object *owned, CatalogIndex *ix)
@@ -351,7 +407,16 @@ static int find_index_for_owned(struct json_object *owned, CatalogIndex *ix)
 	m = idx_get(ix->by_product, store);
 	if(m >= 0)
 		return m;
-	char ck[64];
+	const char *ids[3] = { pid, ent, store };
+	for(size_t i = 0; i < 3; i++)
+	{
+		char stable[128];
+		cc_stable_key(ids[i], stable, sizeof(stable));
+		m = idx_get(ix->by_stable, stable);
+		if(m >= 0)
+			return m;
+	}
+	char ck[384];
 	concept_platform_key(owned, ck, sizeof(ck));
 	if(*ck)
 		return idx_get(ix->by_concept, ck);
@@ -457,7 +522,7 @@ static struct json_object *merge_owned_into_browse(struct json_object *browse,
 			json_object_array_add(games, cc_json_clone(json_object_array_get_idx(browse, i)));
 	}
 
-	CatalogIndex ix = { json_object_new_object(), json_object_new_object() };
+	CatalogIndex ix = { json_object_new_object(), json_object_new_object(), json_object_new_object() };
 	{
 		size_t n = json_object_array_length(games);
 		for(size_t i = 0; i < n; i++)
@@ -499,7 +564,9 @@ static struct json_object *merge_owned_into_browse(struct json_object *browse,
 		bool is_trial = cc_json_int(owned_game, "feature_type") == 1;
 		if(is_trial && set_has(fully_owned, game_product_id(owned_game)))
 			continue;
-		int match = is_trial ? -1 : find_index_for_owned(owned_game, &ix);
+		// feature_type 1 is not inherently a trial; after the explicit trial/demo
+		// sanitation it is commonly the valid PS Plus subscription entitlement.
+		int match = find_index_for_owned(owned_game, &ix);
 
 		if(match >= 0)
 		{
@@ -521,9 +588,18 @@ static struct json_object *merge_owned_into_browse(struct json_object *browse,
 					cc_json_set_str(existing, "id", owned_id);
 				if(*owned_pid)
 				{
-					cc_json_set_str(existing, "product_id", owned_pid);
 					cc_json_set_str(existing, "productId", owned_pid);
+					const char *owned_store = cc_json_str(owned_game, "storeProductId");
+					if(cc_json_bool(owned_game, "directEntitlement") && *owned_store)
+					{
+						cc_json_set_str(existing, "product_id", owned_store);
+						cc_json_set_str(existing, "storeProductId", owned_store);
+					}
+					else
+						cc_json_set_str(existing, "product_id", owned_pid);
 				}
+				cc_json_set_bool(existing, "plusCatalog",
+					cc_json_bool(existing, "plusCatalog") || cc_json_bool(owned_game, "plusCatalog"));
 				cc_json_set_str(existing, "serviceType", "pscloud");
 				continue;
 			}
@@ -570,7 +646,7 @@ static struct json_object *merge_owned_into_browse(struct json_object *browse,
 			struct json_object *g = json_object_array_get_idx(games, i);
 			if(!cc_json_bool(g, "isOwned"))
 				continue;
-			char ck[64];
+			char ck[384];
 			concept_platform_key(g, ck, sizeof(ck));
 			if(*ck)
 				set_add(owned_keys, ck);
@@ -581,7 +657,7 @@ static struct json_object *merge_owned_into_browse(struct json_object *browse,
 			struct json_object *g = json_object_array_get_idx(games, i);
 			if(!cc_json_bool(g, "isOwned"))
 			{
-				char ck[64];
+				char ck[384];
 				concept_platform_key(g, ck, sizeof(ck));
 				if(*ck && set_has(owned_keys, ck))
 					continue; // purchaseable duplicate of an owned title
@@ -600,6 +676,7 @@ static struct json_object *merge_owned_into_browse(struct json_object *browse,
 	json_object_put(ordered);
 	json_object_put(ix.by_product);
 	json_object_put(ix.by_concept);
+	json_object_put(ix.by_stable);
 	return games;
 }
 
@@ -805,9 +882,11 @@ const char *cc_extract_cover_image(struct json_object *game_obj, char *out, size
 
 void cc_merge_imagic_list(const char *category_list, struct json_object *list_doc,
                           struct json_object *games_by_edition, struct json_object *supplement,
-                          struct json_object *aliases, int *total_seen)
+                          struct json_object *aliases, struct json_object *all_ps5_stable_keys,
+                          int *total_seen)
 {
 	bool plus_catalog = is_plus_catalog_list(category_list);
+	bool all_ps5_list = category_list && strcmp(category_list, "all-ps5-list") == 0;
 	if(!list_doc || json_object_get_type(list_doc) != json_type_array)
 		return;
 	size_t ncat = json_object_array_length(list_doc);
@@ -828,10 +907,18 @@ void cc_merge_imagic_list(const char *category_list, struct json_object *list_do
 			if(!is_cloud_device_game(g))
 				continue;
 
+			const char *pid = cc_json_str(g, "productId");
+			char stable[128];
+			cc_stable_key(pid, stable, sizeof(stable));
+			if(all_ps5_list && *stable)
+				set_add(all_ps5_stable_keys, stable);
+
 			if(plus_catalog && !cc_json_bool(g, "streamingSupported"))
 			{
-				const char *pid = cc_json_str(g, "productId");
-				if(*pid)
+				// A monthly claim or third-party subscription entry is not proof that
+				// Sony exposes this title to PS Cloud. Only supplement it when the
+				// authoritative all-ps5-list contains the same stable title ID.
+				if(*pid && *stable && set_has(all_ps5_stable_keys, stable))
 				{
 					struct json_object *gc = cc_json_clone(g);
 					cc_json_set_bool(gc, "plusCatalog", true);
@@ -843,9 +930,8 @@ void cc_merge_imagic_list(const char *category_list, struct json_object *list_do
 			if(!is_cloud_streaming_game(g))
 				continue;
 
-			char key[96];
+			char key[384];
 			edition_key(g, key, sizeof(key));
-			const char *pid = cc_json_str(g, "productId");
 			if(!*key || !*pid)
 				continue;
 
@@ -896,6 +982,8 @@ static int owned_stream_rank(struct json_object *o)
 		rank += 2;
 	if(*id)
 		rank += 1;
+	if(cc_contains(id, "PPSA"))
+		rank += 3;
 	return rank;
 }
 
@@ -1076,6 +1164,150 @@ static void normalize_title(const char *raw, char *out, size_t out_sz)
 	out[o] = 0;
 }
 
+static bool title_matches(struct json_object *ent, struct json_object *meta)
+{
+	struct json_object *gm = cc_json_obj(ent, "game_meta");
+	const char *ent_name = gm ? cc_json_str(gm, "name") : cc_json_str(ent, "name");
+	const char *meta_name = cc_json_str(meta, "name");
+	char a[256], b[256];
+	normalize_title(ent_name, a, sizeof(a));
+	normalize_title(meta_name, b, sizeof(b));
+	return *a && *b && strcmp(a, b) == 0;
+}
+
+static bool is_direct_library_extra(struct json_object *ent)
+{
+	struct json_object *gm = cc_json_obj(ent, "game_meta");
+	const char *package = gm ? cc_json_str(gm, "package_type") : "";
+	if(!cc_json_bool(ent, "active_flag") || cc_json_int(ent, "feature_type") == 0)
+		return true;
+	size_t package_len = strlen(package);
+	if(package_len >= 2 && strcasecmp(package + package_len - 2, "GT") == 0)
+		return true;
+	if(cc_ieq(package, "PSMEDIA") || cc_ieq(package, "PSTRACK"))
+		return true;
+
+	const char *name = gm ? cc_json_str(gm, "name") : cc_json_str(ent, "name");
+	char normalized[256], compact[256];
+	normalize_title(name, normalized, sizeof(normalized));
+	const char *sku = cc_json_str(ent, "sku_type");
+	if(!*sku && gm)
+		sku = cc_json_str(gm, "sku_type");
+	char sku_normalized[128];
+	normalize_title(sku, sku_normalized, sizeof(sku_normalized));
+	if(strstr(sku_normalized, "trial") != NULL
+		|| strcmp(normalized, "trial") == 0 || strstr(normalized, " trial") != NULL
+		|| strncmp(normalized, "trial ", 6) == 0
+		|| strcmp(normalized, "demo") == 0 || strstr(normalized, " demo") != NULL
+		|| strncmp(normalized, "demo ", 5) == 0)
+		return true;
+	size_t c = 0;
+	for(size_t i = 0; normalized[i] && c < sizeof(compact) - 1; i++)
+		if(normalized[i] != ' ')
+			compact[c++] = normalized[i];
+	compact[c] = 0;
+
+	bool bonus = strstr(normalized, "bonus content") != NULL;
+	bool playable_bonus = bonus && strstr(normalized, "master collection") != NULL;
+	return strstr(compact, "artbook") != NULL
+		|| strncmp(normalized, "the art of ", 11) == 0
+		|| strstr(normalized, "soundtrack") != NULL
+		|| strstr(normalized, "content viewer") != NULL
+		|| (bonus && !playable_bonus);
+}
+
+static struct json_object *direct_catalog_match(struct json_object *ent, const char *stream_id,
+	struct json_object *browse_map, struct json_object *browse_stable,
+	struct json_object *browse_concept, struct json_object *supp_map,
+	struct json_object *supp_stable, struct json_object *supp_concept,
+	bool *from_supplement)
+{
+	*from_supplement = false;
+	struct json_object *meta = objmap_get(browse_map, stream_id);
+	if(meta)
+		return meta;
+	meta = objmap_get(supp_map, stream_id);
+	if(meta)
+	{
+		*from_supplement = true;
+		return meta;
+	}
+
+	char stable[128];
+	cc_stable_key(stream_id, stable, sizeof(stable));
+	if(*stable)
+	{
+		meta = objmap_get(browse_stable, stable);
+		if(meta && title_matches(ent, meta))
+			return meta;
+		meta = objmap_get(supp_stable, stable);
+		if(meta && title_matches(ent, meta))
+		{
+			*from_supplement = true;
+			return meta;
+		}
+	}
+
+	char concept[24];
+	owned_concept_id(ent, concept, sizeof(concept));
+	if(*concept)
+	{
+		meta = objmap_get(browse_concept, concept);
+		if(meta && title_matches(ent, meta))
+			return meta;
+		meta = objmap_get(supp_concept, concept);
+		if(meta && title_matches(ent, meta))
+		{
+			*from_supplement = true;
+			return meta;
+		}
+	}
+	return NULL;
+}
+
+static void emit_direct_owned(struct json_object *ent, const char *stream_id,
+	struct json_object *meta, bool from_supplement, struct json_object *owned_by_key)
+{
+	struct json_object *entry = cc_json_clone(ent);
+	struct json_object *gm = cc_json_obj(entry, "game_meta");
+	const char *name = gm ? cc_json_str(gm, "name") : "";
+	if(*name)
+		cc_json_set_str(entry, "name", name);
+	cc_json_set_str(entry, "productId", stream_id);
+	cc_json_set_str(entry, "serviceType", "pscloud");
+	cc_json_set_bool(entry, "isOwned", true);
+	cc_json_set_bool(entry, "directEntitlement", true);
+	cc_json_set_bool(entry, "plusCatalog", cc_json_int(entry, "feature_type") == 1);
+	cc_json_set_bool(entry, "streamingSupported", meta && !from_supplement);
+	const char *store = cc_json_str(entry, "product_id");
+	if(*store)
+		cc_json_set_str(entry, "storeProductId", store);
+
+	if(meta)
+	{
+		const char *catalog_pid = game_product_id(meta);
+		if(*catalog_pid)
+			cc_json_set_str(entry, "catalogProductId", catalog_pid);
+		const char *image = cc_json_str(meta, "imageUrl");
+		if(*image)
+			cc_json_set_str(entry, "imageUrl", image);
+		const char *landscape = cc_json_str(meta, "landscapeImageUrl");
+		if(*landscape)
+			cc_json_set_str(entry, "landscapeImageUrl", landscape);
+		char concept[24];
+		concept_id_string(meta, "conceptId", concept, sizeof(concept));
+		if(*concept)
+			cc_json_set_str(entry, "conceptId", concept);
+	}
+
+	char key[320];
+	snprintf(key, sizeof(key), "p:%s", stream_id);
+	struct json_object *existing = objmap_get(owned_by_key, key);
+	if(!existing || owned_better(entry, existing))
+		objmap_put_last(owned_by_key, key, entry);
+	json_object_put(entry);
+}
+
 static bool strlist_contains(char list[][128], int n, const char *s)
 {
 	for(int i = 0; i < n; i++)
@@ -1090,6 +1322,7 @@ struct json_object *cc_build_owned_cross_ref(ChiakiLog *log,
 	struct json_object *owned_games, struct json_object *component_ids)
 {
 	struct json_object *cloud_map = json_object_new_object();
+	struct json_object *imagic_map = json_object_new_object();
 	struct json_object *supp_map = json_object_new_object();
 	struct json_object *browse_stable = json_object_new_object();
 	struct json_object *supp_stable = json_object_new_object();
@@ -1117,6 +1350,7 @@ struct json_object *cc_build_owned_cross_ref(ChiakiLog *log,
 		{
 			struct json_object *g = json_object_array_get_idx(imagic_browse, i);
 			objmap_put_last(cloud_map, cc_json_str(g, "productId"), g);
+			objmap_put_last(imagic_map, cc_json_str(g, "productId"), g);
 		}
 	}
 	// aliases: alias -> canonical (only when canonical already mapped and alias not).
@@ -1130,6 +1364,9 @@ struct json_object *cc_build_owned_cross_ref(ChiakiLog *log,
 			struct json_object *c = objmap_get(cloud_map, canonical);
 			if(c)
 				objmap_put_last(cloud_map, alias, c);
+			c = objmap_get(imagic_map, canonical);
+			if(c)
+				objmap_put_last(imagic_map, alias, c);
 		}
 	}
 	if(imagic_supplement)
@@ -1161,6 +1398,26 @@ struct json_object *cc_build_owned_cross_ref(ChiakiLog *log,
 
 		const char *product_id = cc_json_str(ow, "product_id");
 		const char *entitlement_id = cc_json_str(ow, "id");
+		// CloudPad's current PS5 Library is entitlement-authoritative. The
+		// entitlement id is the Gaikai identifier even when product_id names a
+		// PS4 purchase, cross-edition bundle, or regional wrapper. A catalog match
+		// may enrich this row but is never required for it to remain visible.
+		const char *direct_stream_id = *entitlement_id ? entitlement_id : product_id;
+		if(cc_contains(direct_stream_id, "PPSA"))
+		{
+			if(!is_direct_library_extra(ow))
+			{
+				bool from_supplement = false;
+				struct json_object *direct_meta = direct_catalog_match(ow, direct_stream_id,
+					imagic_map, browse_stable, browse_concept, supp_map,
+					supp_stable, supp_concept, &from_supplement);
+				emit_direct_owned(ow, direct_stream_id, direct_meta, from_supplement,
+					owned_by_key);
+			}
+			json_object_put(ow);
+			continue;
+		}
+
 		struct json_object *gm = cc_json_obj(ow, "game_meta");
 		const char *ent_name = gm ? cc_json_str(gm, "name") : "";
 		char ent_name_lc[256];
@@ -1177,14 +1434,18 @@ struct json_object *cc_build_owned_cross_ref(ChiakiLog *log,
 
 		if(*product_id && (meta = objmap_get(cloud_map, product_id))) { }
 		else if(*entitlement_id && (meta = objmap_get(cloud_map, entitlement_id))) { }
-		else if(*owned_concept && (meta = objmap_get(browse_concept, owned_concept))) { }
-		else if(*owned_concept && (meta = objmap_get(supp_concept, owned_concept))) { from_supp = true; }
-		else if(*product_id && *entitlement_id && strcmp(entitlement_id, product_id) == 0
-			&& (meta = objmap_get(supp_map, product_id))) { from_supp = true; }
 		else if(*stable_k && !skip_demo && (meta = objmap_get(browse_stable, stable_k))) { }
-		else if(*stable_k && !skip_demo && (meta = objmap_get(supp_stable, stable_k))) { from_supp = true; }
 		else if(*ent_stable_k && !skip_demo && (meta = objmap_get(browse_stable, ent_stable_k))) { }
-		else if(*ent_stable_k && !skip_demo && (meta = objmap_get(supp_stable, ent_stable_k))) { from_supp = true; }
+		else if(*stable_k && !skip_demo && cc_json_int(ow, "feature_type") == 3
+			&& (meta = objmap_get(supp_stable, stable_k))) { from_supp = true; }
+		else if(*ent_stable_k && !skip_demo && cc_json_int(ow, "feature_type") == 3
+			&& (meta = objmap_get(supp_stable, ent_stable_k))) { from_supp = true; }
+		else if(*owned_concept && (meta = objmap_get(browse_concept, owned_concept))) { }
+		else if(*owned_concept && cc_json_int(ow, "feature_type") == 3
+			&& (meta = objmap_get(supp_concept, owned_concept))) { from_supp = true; }
+		else if(*product_id && *entitlement_id && strcmp(entitlement_id, product_id) == 0
+			&& cc_json_int(ow, "feature_type") == 3
+			&& (meta = objmap_get(supp_map, product_id))) { from_supp = true; }
 
 		if(meta)
 		{
@@ -1299,6 +1560,7 @@ struct json_object *cc_build_owned_cross_ref(ChiakiLog *log,
 	}
 
 	json_object_put(cloud_map);
+	json_object_put(imagic_map);
 	json_object_put(supp_map);
 	json_object_put(browse_stable);
 	json_object_put(supp_stable);
@@ -1388,7 +1650,12 @@ struct json_object *cc_assemble_unified_catalog(ChiakiLog *log, const CCAssemble
 		for(size_t i = 0; i < n; i++)
 		{
 			struct json_object *g = json_object_array_get_idx(games, i);
-			if(!cc_json_bool(g, "isOwned") || streamability_is_streamable(&ix, g))
+			// PS5 Library rows are entitlement-authoritative. A missing public
+			// catalog match means "unknown until launch", not "hide the game".
+			// Retain the legacy streamability gate only for PS Now ownership rows.
+			if(!cc_json_bool(g, "isOwned")
+				|| cc_ieq(stream_service_type(g), "pscloud")
+				|| streamability_is_streamable(&ix, g))
 				json_object_array_add(kept, json_object_get(g));
 			else
 				dropped++;

@@ -693,8 +693,10 @@ struct json_object *cc_fetch_apollo_fallback(ChiakiLog *log, const char *account
 // ===========================================================================
 
 static const char *const kImagicLists[] = {
-	"plus-games-list", "ubisoft-classics-list", "plus-classics-list",
-	"plus-monthly-games-list", "free-to-play-list", "all-ps5-list",
+	// Process the authoritative universe first. The Plus supplement is only
+	// allowed to contain title IDs Sony also publishes in this list.
+	"all-ps5-list", "plus-games-list", "ubisoft-classics-list",
+	"plus-classics-list", "plus-monthly-games-list", "free-to-play-list",
 };
 #define IMAGIC_LIST_COUNT 6
 
@@ -725,6 +727,7 @@ bool cc_fetch_imagic(ChiakiLog *log, const char *stored_locale, CCImagicResult *
 		struct json_object *games_by_edition = json_object_new_object();
 		struct json_object *supplement = json_object_new_object();
 		struct json_object *aliases = json_object_new_object();
+		struct json_object *all_ps5_stable_keys = json_object_new_object();
 		int total_seen = 0, succeeded = 0;
 		bool all_ps5_ok = false;
 
@@ -760,7 +763,8 @@ bool cc_fetch_imagic(ChiakiLog *log, const char *stored_locale, CCImagicResult *
 			succeeded++;
 			if(strcmp(kImagicLists[i], "all-ps5-list") == 0)
 				all_ps5_ok = true;
-			cc_merge_imagic_list(kImagicLists[i], doc, games_by_edition, supplement, aliases, &total_seen);
+			cc_merge_imagic_list(kImagicLists[i], doc, games_by_edition, supplement,
+				aliases, all_ps5_stable_keys, &total_seen);
 			json_object_put(doc);
 		}
 
@@ -769,6 +773,7 @@ bool cc_fetch_imagic(ChiakiLog *log, const char *stored_locale, CCImagicResult *
 			json_object_put(games_by_edition);
 			json_object_put(supplement);
 			json_object_put(aliases);
+			json_object_put(all_ps5_stable_keys);
 			continue; // escalate to next locale tier
 		}
 
@@ -804,6 +809,7 @@ bool cc_fetch_imagic(ChiakiLog *log, const char *stored_locale, CCImagicResult *
 
 		json_object_put(games_by_edition);
 		json_object_put(supplement);
+		json_object_put(all_ps5_stable_keys);
 
 		out->browse = browse;
 		out->supplement = supp;
@@ -826,7 +832,47 @@ bool cc_fetch_imagic(ChiakiLog *log, const char *stored_locale, CCImagicResult *
 // Owned entitlements
 // ===========================================================================
 
-// filterOwnedPs5Games: keep active game entitlements (feature_type != 0), set imageUrl + serviceType.
+static bool contains_word_ci(const char *text, const char *word)
+{
+	if(!text || !word || !*word)
+		return false;
+	size_t wn = strlen(word);
+	for(size_t i = 0; text[i]; i++)
+	{
+		size_t j = 0;
+		while(j < wn && text[i + j]
+			&& tolower((unsigned char)text[i + j]) == tolower((unsigned char)word[j]))
+			j++;
+		if(j != wn)
+			continue;
+		unsigned char before = i ? (unsigned char)text[i - 1] : 0;
+		unsigned char after = (unsigned char)text[i + wn];
+		if((!before || !isalnum(before)) && (!after || !isalnum(after)))
+			return true;
+	}
+	return false;
+}
+
+static bool contains_ci(const char *text, const char *needle)
+{
+	if(!text || !needle || !*needle)
+		return false;
+	size_t nn = strlen(needle);
+	for(size_t i = 0; text[i]; i++)
+	{
+		size_t j = 0;
+		while(j < nn && text[i + j]
+			&& tolower((unsigned char)text[i + j]) == tolower((unsigned char)needle[j]))
+			j++;
+		if(j == nn)
+			return true;
+	}
+	return false;
+}
+
+// Keep active game-like entitlements. This intentionally retains feature_type 1:
+// Sony uses it both for subscription access and trials, so the explicit package,
+// SKU and name filters below separate the usable entries.
 static struct json_object *filter_owned(ChiakiLog *log, struct json_object *entitlements)
 {
 	(void)log;
@@ -842,10 +888,18 @@ static struct json_object *filter_owned(ChiakiLog *log, struct json_object *enti
 			continue;
 		if(!cc_json_bool(ent, "active_flag"))
 			continue;
-		const char *pid = cc_json_str(ent, "product_id");
-		if(strncmp(pid, "IP", 2) == 0 || strncmp(pid, "SUB", 3) == 0)
-			continue;
 		if(cc_json_int(ent, "feature_type") == 0)
+			continue;
+		const char *package_type = cc_json_str(gm, "package_type");
+		if(strlen(package_type) >= 2
+			&& strcasecmp(package_type + strlen(package_type) - 2, "GT") == 0)
+			continue;
+		const char *sku_type = cc_json_str(ent, "sku_type");
+		if(!*sku_type)
+			sku_type = cc_json_str(gm, "sku_type");
+		const char *name = cc_json_str(gm, "name");
+		if(contains_ci(sku_type, "trial") || contains_word_ci(name, "demo")
+			|| contains_word_ci(name, "trial"))
 			continue;
 
 		struct json_object *e = cc_json_clone(ent);

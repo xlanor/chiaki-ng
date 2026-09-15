@@ -3,8 +3,8 @@
 // Unified catalog orchestrator + public API. Mirrors the Qt fetchUnifiedCatalog
 // chain: native APOLLOROOT probe -> (public APOLLOROOT fallback walk | expired-warning) ->
 // imagic 6-list -> owned entitlements -> cross-reference -> assemble. Cache keys
-// (unified_catalog_v3 [contract schema; was v2 pre-migration], ps5_cloud_catalog_v6,
-// ps5_cloud_library) are shared across platforms so files stay byte-comparable, and
+// (unified_catalog_v3 [contract schema; was v2 pre-migration], ps5_cloud_catalog_v7,
+// ps5_cloud_library_v2) are shared across platforms so files stay byte-comparable, and
 // the unified read is guarded by schemaVersion so a stale older payload is never served.
 //
 // =============================================================================
@@ -84,8 +84,8 @@ static const char *account_country_from_locale(const char *locale, char *out, si
 	return out;
 }
 
-// Build/write the ps5_cloud_catalog_v6 envelope from imagic outputs.
-static void write_v6_cache(ChiakiLog *log, const char *cache_dir, const char *locale,
+// Build/write the ps5_cloud_catalog_v7 envelope from imagic outputs.
+static void write_v7_cache(ChiakiLog *log, const char *cache_dir, const char *locale,
                            struct json_object *browse, struct json_object *supplement,
                            struct json_object *aliases)
 {
@@ -96,7 +96,7 @@ static void write_v6_cache(ChiakiLog *log, const char *cache_dir, const char *lo
 	json_object_object_add(v6, "plusLibrarySupplement", cc_json_clone(supplement));
 	if(aliases && json_object_object_length(aliases) > 0)
 		json_object_object_add(v6, "productIdAliases", cc_json_clone(aliases));
-	cc_cache_write(log, cache_dir, "ps5_cloud_catalog_v6", v6);
+	cc_cache_write(log, cache_dir, "ps5_cloud_catalog_v7", v6);
 	json_object_put(v6);
 }
 
@@ -107,7 +107,7 @@ static void write_library_cache(ChiakiLog *log, const char *cache_dir,
 	json_object_object_add(lib, "games", cc_json_clone(owned));
 	json_object_object_add(lib, "total", json_object_new_int((int)json_object_array_length(owned)));
 	json_object_object_add(lib, "componentIdsByProductId", cc_json_clone(components));
-	cc_cache_write(log, cache_dir, "ps5_cloud_library", lib);
+	cc_cache_write(log, cache_dir, "ps5_cloud_library_v2", lib);
 	json_object_put(lib);
 }
 
@@ -266,7 +266,7 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_cloudcatalog_fetch_unified(
 	char settled[16];
 	snprintf(settled, sizeof(settled), "%s", effective_locale);
 
-	struct json_object *v6 = force ? NULL : cc_cache_read(log, cache_dir, "ps5_cloud_catalog_v6", CC_CACHE_TTL_MS);
+	struct json_object *v6 = force ? NULL : cc_cache_read(log, cache_dir, "ps5_cloud_catalog_v7", CC_CACHE_TTL_MS);
 	if(v6)
 	{
 		const char *cl = cc_json_str(v6, "locale");
@@ -305,7 +305,7 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_cloudcatalog_fetch_unified(
 			snprintf(settled, sizeof(settled), "%s", ir.settled_locale);
 			browse_complete = ir.all_ps5_list_succeeded;
 			if(ir.all_ps5_list_succeeded)
-				write_v6_cache(log, cache_dir, settled, browse, supplement, aliases);
+				write_v7_cache(log, cache_dir, settled, browse, supplement, aliases);
 			cc_imagic_result_fini(&ir);
 		}
 		else
@@ -338,7 +338,7 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_cloudcatalog_fetch_unified(
 	struct json_object *owned = NULL, *components = NULL;
 	if(*npsso && !auth_error)
 	{
-		struct json_object *lib = force ? NULL : cc_cache_read(log, cache_dir, "ps5_cloud_library", CC_CACHE_TTL_MS);
+		struct json_object *lib = force ? NULL : cc_cache_read(log, cache_dir, "ps5_cloud_library_v2", CC_CACHE_TTL_MS);
 		if(lib)
 		{
 			struct json_object *g = cc_json_arr(lib, "games");
@@ -429,7 +429,8 @@ CHIAKI_EXPORT void chiaki_cloudcatalog_invalidate_cache(const char *cache_dir)
 	// Current keys + legacy keys, so invalidation also purges caches written by
 	// older builds (e.g. the pre-contract unified_catalog_v2).
 	static const char *const keys[] = {
-		"unified_catalog_v3", "ps5_cloud_catalog_v6", "ps5_cloud_library",
+		"unified_catalog_v3", "ps5_cloud_catalog_v7", "ps5_cloud_library_v2",
+		"ps5_cloud_catalog_v6", "ps5_cloud_library",
 		"psnow_catalog",
 		"unified_catalog_v2", "unified_catalog_v1",
 		"ps5_cloud_catalog_v5", "ps5_cloud_catalog_v4", "ps5_cloud_catalog_v3",

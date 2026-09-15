@@ -162,19 +162,22 @@ struct json_object *cc_build_owned_cross_ref(ChiakiLog *log,
 
 /**
  * mergeImagicListIntoPs5Catalog: fold one imagic category-list document into the
- * accumulators. @p games_by_edition (concept|platform -> game), @p supplement
- * (productId -> game), @p aliases (alt productId -> canonical) are json object
- * maps mutated in place. Mirrors the Qt helper exactly.
+ * accumulators. @p games_by_edition (concept|platform|title -> game), @p supplement
+ * (productId -> game), @p aliases (alt productId -> canonical), and
+ * @p all_ps5_stable_keys (stable title IDs present in all-ps5-list) are json
+ * object maps mutated in place.
  */
 void cc_merge_imagic_list(const char *category_list, struct json_object *list_doc,
 	struct json_object *games_by_edition, struct json_object *supplement,
-	struct json_object *aliases, int *total_seen);
+	struct json_object *aliases, struct json_object *all_ps5_stable_keys,
+	int *total_seen);
 
 /** Cover-image extraction (images[type 10]>12>13, then imageUrl). Returns "" if none. */
 const char *cc_extract_cover_image(struct json_object *game_obj, char *out, size_t out_sz);
 
-/** Stable-key derivation for ownership-match: splits product_id on [-_], drops the last
- *  token, joins with '|'. Returns "" if fewer than 2 tokens. */
+/** Stable-key derivation for ownership matching. PPSA/CUSA title numbers win;
+ *  unknown identifier families fall back to splitting on [-_] and dropping the
+ *  last token. Returns "" when no stable structure can be derived. */
 const char *cc_stable_key(const char *product_id, char *out, size_t out_sz);
 
 /**

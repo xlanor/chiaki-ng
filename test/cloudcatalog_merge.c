@@ -326,11 +326,155 @@ static MunitResult test_stable_key(const MunitParameter params[], void *user)
 	char out[128];
 	munit_assert_string_equal(
 		cc_stable_key("UP9000-CUSA00552_00-GODOFWAR3HDGAME0", out, sizeof(out)),
-		"UP9000|CUSA00552|00");
+		"CUSA00552");
+	munit_assert_string_equal(
+		cc_stable_key("PPSA01147_00", out, sizeof(out)), "PPSA01147");
+	munit_assert_string_equal(
+		cc_stable_key("EP9000-PPSA01147_00-FULLGAME00000000", out, sizeof(out)), "PPSA01147");
 	munit_assert_string_equal(cc_stable_key("A-B-C", out, sizeof(out)), "A|B");
 	munit_assert_string_equal(cc_stable_key("SINGLETOKEN", out, sizeof(out)), "");
 	munit_assert_string_equal(cc_stable_key("", out, sizeof(out)), "");
 	munit_assert_string_equal(cc_stable_key(NULL, out, sizeof(out)), "");
+	return MUNIT_OK;
+}
+
+static MunitResult test_direct_ps5_entitlement_library(const MunitParameter params[], void *user)
+{
+	(void)params; (void)user;
+	struct json_object *owned = parse(
+		"[{\"id\":\"EP9000-PPSA02488_00-NIOH2EU000000000\","
+		"\"product_id\":\"EP9000-CUSA15526_00-NIOH2CROSSBUY00\","
+		"\"active_flag\":true,\"feature_type\":3,\"imageUrl\":\"https://icon/nioh.png\","
+		"\"game_meta\":{\"name\":\"Nioh 2 Remastered\",\"package_type\":\"PSGD\"}}]");
+	struct json_object *empty = json_object_new_array();
+	struct json_object *aliases = json_object_new_object();
+	struct json_object *components = json_object_new_object();
+	struct json_object *xref = cc_build_owned_cross_ref(get_test_log(), empty, empty, empty,
+		aliases, owned, components);
+	munit_assert_int((int)json_object_array_length(xref), ==, 1);
+	struct json_object *direct = json_object_array_get_idx(xref, 0);
+	munit_assert_string_equal(cc_json_str(direct, "productId"),
+		"EP9000-PPSA02488_00-NIOH2EU000000000");
+	munit_assert_string_equal(cc_json_str(direct, "serviceType"), "pscloud");
+	munit_assert_false(cc_json_bool(direct, "streamingSupported"));
+
+	CCAssembleInput in = { 0 };
+	in.owned_cross_ref = xref;
+	in.native_mode = true;
+	struct json_object *env = cc_assemble_unified_catalog(get_test_log(), &in);
+	struct json_object *game = find_pid(games_of(env), "EP9000-PPSA02488_00-NIOH2EU000000000");
+	munit_assert_not_null(game);
+	munit_assert_string_equal(cc_json_str(game, "category"), "owned");
+	munit_assert_string_equal(cc_json_str(game, "streamIdentifier"),
+		"EP9000-PPSA02488_00-NIOH2EU000000000");
+
+	json_object_put(env);
+	json_object_put(xref);
+	json_object_put(components);
+	json_object_put(aliases);
+	json_object_put(empty);
+	json_object_put(owned);
+	return MUNIT_OK;
+}
+
+static MunitResult test_imagic_visibility_identity_and_supplement_gate(const MunitParameter params[], void *user)
+{
+	(void)params; (void)user;
+	struct json_object *all = parse(
+		"[{\"games\":["
+		"{\"productId\":\"EP-PPSA11111_00-ONE\",\"name\":\"TimeSplitters\",\"conceptId\":900,\"device\":[\"PS5\"],\"streamingSupported\":true},"
+		"{\"productId\":\"EP-PPSA22222_00-TWO\",\"name\":\"TimeSplitters 2\",\"conceptId\":900,\"device\":[\"PS5\"],\"streamingSupported\":true},"
+		"{\"productId\":\"EP-PPSA33333_00-MATCH\",\"name\":\"Supplemented\",\"conceptId\":901,\"device\":[\"PS5\"],\"streamingSupported\":false}]}]");
+	struct json_object *plus = parse(
+		"[{\"games\":["
+		"{\"productId\":\"UP-PPSA33333_00-MATCHPLUS\",\"name\":\"Supplemented\",\"conceptId\":901,\"device\":[\"PS5\"],\"streamingSupported\":false},"
+		"{\"productId\":\"UP-PPSA44444_00-MONTHLY\",\"name\":\"Monthly Only\",\"conceptId\":902,\"device\":[\"PS5\"],\"streamingSupported\":false}]}]");
+	struct json_object *editions = json_object_new_object();
+	struct json_object *supplement = json_object_new_object();
+	struct json_object *aliases = json_object_new_object();
+	struct json_object *all_keys = json_object_new_object();
+	int seen = 0;
+	cc_merge_imagic_list("all-ps5-list", all, editions, supplement, aliases, all_keys, &seen);
+	cc_merge_imagic_list("plus-monthly-games-list", plus, editions, supplement, aliases, all_keys, &seen);
+	munit_assert_int((int)json_object_object_length(editions), ==, 2);
+	munit_assert_int((int)json_object_object_length(supplement), ==, 1);
+	struct json_object *matched = NULL;
+	munit_assert_true(json_object_object_get_ex(supplement, "UP-PPSA33333_00-MATCHPLUS", &matched));
+	munit_assert_false(json_object_object_get_ex(supplement, "UP-PPSA44444_00-MONTHLY", &matched));
+
+	json_object_put(all_keys);
+	json_object_put(aliases);
+	json_object_put(supplement);
+	json_object_put(editions);
+	json_object_put(plus);
+	json_object_put(all);
+	return MUNIT_OK;
+}
+
+static MunitResult test_direct_ps5_catalog_enrichment_preserves_owned_identifier(const MunitParameter params[], void *user)
+{
+	(void)params; (void)user;
+	struct json_object *owned = parse(
+		"[{\"id\":\"EP9000-PPSA02488_00-NIOH2EU000000000\","
+		"\"product_id\":\"EP9000-CUSA15526_00-NIOH2CROSSBUY00\","
+		"\"active_flag\":true,\"feature_type\":3,\"imageUrl\":\"https://icon/nioh.png\","
+		"\"game_meta\":{\"name\":\"Nioh 2 Remastered\",\"package_type\":\"PSGD\"}}]");
+	struct json_object *browse = parse(
+		"[{\"productId\":\"UP9000-PPSA02488_00-NIOH2US000000000\","
+		"\"name\":\"Nioh 2 Remastered\",\"conceptId\":77,\"imageUrl\":\"https://cover/nioh.png\","
+		"\"device\":[\"PS5\"],\"streamingSupported\":true}]");
+	struct json_object *empty = json_object_new_array();
+	struct json_object *aliases = json_object_new_object();
+	struct json_object *components = json_object_new_object();
+	struct json_object *xref = cc_build_owned_cross_ref(get_test_log(), empty, browse, empty,
+		aliases, owned, components);
+	struct json_object *direct = json_object_array_get_idx(xref, 0);
+	munit_assert_true(cc_json_bool(direct, "streamingSupported"));
+	munit_assert_string_equal(cc_json_str(direct, "imageUrl"), "https://cover/nioh.png");
+
+	CCAssembleInput in = { 0 };
+	in.imagic_browse = browse;
+	in.owned_cross_ref = xref;
+	in.native_mode = true;
+	struct json_object *env = cc_assemble_unified_catalog(get_test_log(), &in);
+	struct json_object *games = games_of(env);
+	munit_assert_int((int)json_object_array_length(games), ==, 1);
+	struct json_object *game = json_object_array_get_idx(games, 0);
+	munit_assert_string_equal(cc_json_str(game, "productId"),
+		"EP9000-PPSA02488_00-NIOH2EU000000000");
+	munit_assert_string_equal(cc_json_str(game, "storeProductId"),
+		"EP9000-CUSA15526_00-NIOH2CROSSBUY00");
+	munit_assert_string_equal(cc_json_str(game, "streamIdentifier"),
+		"EP9000-PPSA02488_00-NIOH2EU000000000");
+
+	json_object_put(env);
+	json_object_put(xref);
+	json_object_put(components);
+	json_object_put(aliases);
+	json_object_put(empty);
+	json_object_put(browse);
+	json_object_put(owned);
+	return MUNIT_OK;
+}
+
+static MunitResult test_direct_ps5_filters_non_games(const MunitParameter params[], void *user)
+{
+	(void)params; (void)user;
+	struct json_object *owned = parse(
+		"[{\"id\":\"EP-PPSA00001_00-NETFLIX\",\"product_id\":\"EP-PPSA00001_00-NETFLIX\",\"active_flag\":true,\"feature_type\":3,\"game_meta\":{\"name\":\"Netflix\",\"package_type\":\"PSMEDIA\"}},"
+		" {\"id\":\"EP-PPSA00002_00-ARTBOOK\",\"product_id\":\"EP-PPSA00002_00-GAME\",\"active_flag\":true,\"feature_type\":3,\"game_meta\":{\"name\":\"Some Game Artbook\",\"package_type\":\"PSGD\"}},"
+		" {\"id\":\"EP-PPSA00003_00-TRACK\",\"product_id\":\"EP-PPSA00003_00-GAME\",\"active_flag\":true,\"feature_type\":3,\"game_meta\":{\"name\":\"Real Game\",\"package_type\":\"PSTRACK\"}}]");
+	struct json_object *empty = json_object_new_array();
+	struct json_object *aliases = json_object_new_object();
+	struct json_object *components = json_object_new_object();
+	struct json_object *xref = cc_build_owned_cross_ref(get_test_log(), empty, empty, empty,
+		aliases, owned, components);
+	munit_assert_int((int)json_object_array_length(xref), ==, 0);
+	json_object_put(xref);
+	json_object_put(components);
+	json_object_put(aliases);
+	json_object_put(empty);
+	json_object_put(owned);
 	return MUNIT_OK;
 }
 
@@ -343,5 +487,9 @@ MunitTest tests_cloudcatalog_merge[] = {
 	{ "/cloud_language_helpers", test_cloud_language_helpers, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
 	{ "/parse_container_store_locale", test_parse_container_store_locale, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
 	{ "/stable_key", test_stable_key, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+	{ "/direct_ps5_entitlement_library", test_direct_ps5_entitlement_library, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+	{ "/imagic_visibility_identity_and_supplement_gate", test_imagic_visibility_identity_and_supplement_gate, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+	{ "/direct_ps5_catalog_enrichment_preserves_owned_identifier", test_direct_ps5_catalog_enrichment_preserves_owned_identifier, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+	{ "/direct_ps5_filters_non_games", test_direct_ps5_filters_non_games, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
 	{ NULL, NULL, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL }
 };
